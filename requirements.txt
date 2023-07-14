@@ -1,0 +1,6 @@
+requests
+colorama
+bs4
+fake-useragent
+selenium
+urllib3
