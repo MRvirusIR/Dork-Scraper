@@ -1,6 +1,5 @@
-requests
-colorama
-bs4
-fake-useragent
-selenium
-urllib3
+requests>=2.31
+beautifulsoup4>=4.12
+rich>=13.0
+fake-useragent>=1.4
+selenium>=4.15  # optional: only needed for --selenium
