@@ -1,0 +1,6 @@
+# Exposed config / backup / log files
+ext:env "DB_PASSWORD"
+ext:sql "INSERT INTO"
+ext:log "password"
+intitle:"index of" "backup"
+ext:bak OR ext:old inurl:config
