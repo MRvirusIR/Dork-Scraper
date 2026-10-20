@@ -1,8 +1,10 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MRvirusIR/Dork-Scraper/master/img/logo.png" width="130" alt="Dork-Scraper logo">
+  <img src="img/logo-banner.svg" alt="Dork-Scraper banner" width="100%">
 </p>
 
-<h1 align="center">Dork-Scraper</h1>
+<h1 align="center">
+  <img src="img/logo.svg" width="42" align="center" alt=""> Dork-Scraper
+</h1>
 
 <p align="center">
   <b>Fast, multi-engine Google-Dork URL scraper for recon &amp; bug bounty.</b><br>
