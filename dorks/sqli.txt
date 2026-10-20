@@ -1,0 +1,7 @@
+# Parameterised pages often tested for SQL injection (use only on authorised targets)
+inurl:index.php?id=
+inurl:product.php?id=
+inurl:news.php?id=
+inurl:article.php?id=
+inurl:page.php?id=
+inurl:category.php?cat=
