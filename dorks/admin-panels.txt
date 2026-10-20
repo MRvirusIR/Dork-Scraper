@@ -1,0 +1,5 @@
+# Login / admin panels
+inurl:admin intitle:login
+inurl:/wp-admin/
+inurl:/administrator/ intitle:login
+intitle:"admin panel" inurl:login
