@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dork-scraper"
+dynamic = ["version"]
+description = "Multi-engine Google-Dork URL scraper for recon and bug bounty."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "MRvirusIR" }]
+requires-python = ">=3.8"
+keywords = ["dork", "google-dork", "osint", "recon", "bug-bounty", "pentest", "scraper"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Security",
+  "Environment :: Console",
+]
+dependencies = ["requests>=2.31", "beautifulsoup4>=4.12", "rich>=13.0", "fake-useragent>=1.4"]
+
+[project.optional-dependencies]
+selenium = ["selenium>=4.15"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+dork-scraper = "dorkscraper.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/MRvirusIR/Dork-Scraper"
+Issues = "https://github.com/MRvirusIR/Dork-Scraper/issues"
+
+[tool.setuptools]
+packages = ["dorkscraper"]
+
+[tool.setuptools.dynamic]
+version = { attr = "dorkscraper.__version__" }
