@@ -215,7 +215,8 @@ def css():
 
 @app.get('/api/config')
 def config():
-    return {'engines': sorted(ENGINES), 'brave_configured': bool(os.environ.get('BRAVE_API_KEY'))}
+    return {'engines': sorted(ENGINES), 'brave_configured': bool(os.environ.get('BRAVE_API_KEY')),
+            'serpapi_google_configured': bool(os.environ.get('SERPAPI_API_KEY'))}
 
 
 @app.post('/api/clean')

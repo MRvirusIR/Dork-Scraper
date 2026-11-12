@@ -97,6 +97,22 @@ class DorkScraper:
             headers["X-Subscription-Token"] = key
             headers["Accept"] = "application/json"
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
+        if self.engine.lower() == "serpapi_google":
+            key = os.environ.get("SERPAPI_API_KEY")
+            if not key:
+                raise ValueError("SerpApi Google requires the SERPAPI_API_KEY environment variable")
+            # SerpApi documents API key as a query parameter. Never propagate
+            # request exceptions, which may contain the full credential-bearing URL.
+            try:
+                resp = requests.get(url, params={"api_key": key}, headers=headers,
+                                    proxies=proxies, timeout=self.timeout, allow_redirects=False)
+                if 300 <= resp.status_code < 400:
+                    raise ValueError("SerpApi returned a redirect; request stopped")
+                resp.raise_for_status()
+                return resp.text
+            except requests.RequestException as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                raise ValueError("SerpApi request failed" + (" (HTTP %s)" % status if status else " (network error)")) from None
         resp = requests.get(url, headers=headers, proxies=proxies, timeout=self.timeout, allow_redirects=self.engine.lower() != "brave")
         resp.raise_for_status()
         return resp.text
@@ -129,18 +145,23 @@ class DorkScraper:
         last_exc: Optional[Exception] = None
         if self.engine.lower() == "brave" and not os.environ.get("BRAVE_API_KEY"):
             raise ValueError("Brave requires the BRAVE_API_KEY environment variable")
-        if self.engine.lower() == "brave" and self.use_selenium:
-            raise ValueError("Brave API cannot be used with Selenium")
-        for attempt in range(1, self.retries + 2):
+        if self.engine.lower() == "serpapi_google" and not os.environ.get("SERPAPI_API_KEY"):
+            raise ValueError("SerpApi Google requires the SERPAPI_API_KEY environment variable")
+        if self.engine.lower() in ("brave", "serpapi_google") and self.use_selenium:
+            raise ValueError("API providers cannot be used with Selenium")
+        # Never retry potentially billable SerpApi searches automatically.
+        attempts = 1 if self.engine.lower() == "serpapi_google" else self.retries + 1
+        for attempt in range(1, attempts + 1):
             try:
                 if self.use_selenium:
                     return self._fetch_selenium(url)
                 return self._fetch_http(url)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
-                wait = self.delay * attempt + random.random()
-                self._emit("warn", f"fetch failed (attempt {attempt}): {exc}; retrying in {wait:.1f}s")
-                time.sleep(wait)
+                if attempt < attempts:
+                    wait = self.delay * attempt + random.random()
+                    self._emit("warn", f"fetch failed (attempt {attempt}): {exc}; retrying in {wait:.1f}s")
+                    time.sleep(wait)
         raise last_exc  # type: ignore[misc]
 
     def _sleep_between(self) -> None:

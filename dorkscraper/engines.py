@@ -154,6 +154,30 @@ class BraveEngine(Engine):
     def is_blocked(html: str) -> bool:
         return False
 
+
+class SerpApiGoogleEngine(Engine):
+    """Google results via the optional third-party SerpApi service."""
+    name = "serpapi_google"
+    per_page = 10
+
+    def build_url(self, dork: str, page: int) -> str:
+        params = {"engine": "google", "q": dork, "start": page * self.per_page, "output": "json"}
+        return "https://serpapi.com/search.json?" + urllib.parse.urlencode(params)
+
+    def parse(self, html: str) -> List[str]:
+        data = json.loads(html)
+        if data.get("error"):
+            raise ValueError("SerpApi returned an error; check account, quota and query")
+        results = data.get("organic_results") or []
+        if not isinstance(results, list):
+            raise ValueError("Invalid SerpApi response")
+        return [item["link"] for item in results if isinstance(item, dict)
+                and isinstance(item.get("link"), str)]
+
+    @staticmethod
+    def is_blocked(html: str) -> bool:
+        return False
+
 def _decode_bing(href: str) -> str:
     """Bing sometimes wraps results in bing.com/ck/a?...&u=a1<base64>."""
     if "bing.com/ck/a" not in href:
@@ -176,7 +200,7 @@ def _is_engine_internal(url: str, needles) -> bool:
 
 
 ENGINES: Dict[str, Type[Engine]] = {
-    cls.name: cls for cls in (GoogleEngine, BingEngine, DuckDuckGoEngine, YahooEngine, BraveEngine)
+    cls.name: cls for cls in (GoogleEngine, BingEngine, DuckDuckGoEngine, YahooEngine, BraveEngine, SerpApiGoogleEngine)
 }
 
 
