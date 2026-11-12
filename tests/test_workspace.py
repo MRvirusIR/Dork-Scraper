@@ -317,3 +317,170 @@ def test_duckduckgo_serpapi_invalid_pagination_is_error(monkeypatch):
     monkeypatch.setattr(DorkScraper, '_fetch', lambda self, url: '{"organic_results":[{"link":"https://example.com/"}],"serpapi_pagination":{"next":"https://serpapi.com/search?start=0"}}')
     result = DorkScraper(engine='serpapi_duckduckgo', pages=2).scrape('site:example.com')
     assert result.pages_fetched == 1 and 'pagination offset' in result.error
+
+
+def test_bing_rss_scope_and_repeated_page_stop(monkeypatch):
+    rss = '<rss><channel><item><link>https://example.com/a?id=1</link></item><item><link>https://elsewhere.test/a</link></item></channel></rss>'
+    calls = []
+    def fetch(self, url): calls.append(url); return rss
+    monkeypatch.setattr(DorkScraper, '_fetch', fetch)
+    monkeypatch.setattr(DorkScraper, '_sleep_between', lambda self: None)
+    r = DorkScraper(engine='bing_rss', pages=5).scrape('site:example.com')
+    assert len(calls) == 2 and r.urls == ['https://example.com/a?id=1']
+    assert r.out_of_scope_count == 1 and 'repeated' in r.warning
+
+
+def test_empty_unrecognized_html_shows_warning(monkeypatch):
+    monkeypatch.setattr(DorkScraper, '_fetch', lambda self, url: '<html><div>unknown response</div></html>')
+    r = DorkScraper(engine='bing').scrape('site:example.com')
+    assert r.error is None and r.warning and 'No URLs parsed' in r.warning
+
+
+def test_manual_challenge_waits_for_same_browser_session(monkeypatch):
+    import threading
+    monkeypatch.setattr('dorkscraper.core.time.sleep', lambda _: None)
+    class Event(threading.Event):
+        def wait(self, timeout=None): return False
+    class Driver:
+        def __init__(self): self.reads=0; self.visits=[]
+        def get(self, url): self.visits.append(url)
+        @property
+        def page_source(self):
+            self.reads+=1
+            return '<div class="anomaly-modal">challenge</div>' if self.reads < 3 else '<a class="result__a" href="https://example.com/x">x</a>'
+    driver = Driver(); notices=[]
+    monkeypatch.setattr(DorkScraper, '_get_driver', lambda self: driver)
+    scraper = DorkScraper(engine='duckduckgo', use_selenium=True, headless=False, manual_captcha=True, cancel_event=Event(), challenge_notice=notices.append)
+    result = scraper.scrape('site:example.com')
+    assert result.urls == ['https://example.com/x'] and not result.blocked
+    assert len(driver.visits) == 1 and len(notices) == 2 and 'Solve the challenge' in notices[0] and notices[1] == ''
+
+
+def test_manual_challenge_cancel_and_cleanup(monkeypatch):
+    import threading
+    monkeypatch.setattr('dorkscraper.core.time.sleep', lambda _: None)
+    class Driver:
+        page_source = '<div class="anomaly-modal">challenge</div>'
+        def get(self, url): pass
+    monkeypatch.setattr(DorkScraper, '_get_driver', lambda self: Driver())
+    cancel = threading.Event(); cancel.set(); notices=[]
+    scraper = DorkScraper(engine='google', use_selenium=True, headless=False, manual_captcha=True, cancel_event=cancel, challenge_notice=notices.append)
+    result = scraper.scrape('site:example.com')
+    assert result.blocked and len(notices) == 2 and notices[-1] == ''
+
+
+def test_web_manual_preflight_requires_supported_engine(client):
+    r = client.post('/api/jobs',headers=headers(),json={'queries':['test'],'engines':['bing_rss'],'manual_browser':True})
+    assert r.status_code == 422 and 'requires direct' in r.json()['detail']
+
+
+def test_session_reused_and_closed_for_batch(tmp_path, monkeypatch):
+    import threading
+    monkeypatch.setattr(webapp, 'DB_PATH', tmp_path / 'reuse.db'); webapp.init_db()
+    used=[]; closed=[]
+    def scrape(self, query):
+        used.append(id(self)); return SearchResult(dork=query, engine=self.engine)
+    monkeypatch.setattr(DorkScraper, 'scrape', scrape)
+    monkeypatch.setattr(DorkScraper, 'close', lambda self: closed.append(id(self)))
+    class Event(threading.Event):
+        def wait(self, timeout=None): return False
+    job={'id':'reuse','created':time.time(),'queries':['one','two'],'engines':['duckduckgo'],'pages':1,'delay':1,'manual_browser':True}
+    webapp.run_job(job, {}, Event())
+    assert job['status'] == 'completed' and len(used)==2 and used[0]==used[1] and closed==[used[0]]
+
+
+def test_keyless_search_warns_when_provider_ignores_site(monkeypatch):
+    monkeypatch.setattr(DorkScraper, '_fetch', lambda self,url: '<rss><channel><item><link>https://unrelated.test/</link></item></channel></rss>')
+    result = DorkScraper(engine='bing_rss').scrape('site:example.com')
+    assert result.urls == [] and result.out_of_scope_count == 1 and 'ignored site:' in result.warning
+
+
+def test_searxng_warns_on_partial_upstream_failure(monkeypatch):
+    monkeypatch.setenv('SEARXNG_URL','http://localhost:8080')
+    monkeypatch.setattr(DorkScraper,'_fetch',lambda self, url:'{"results":[{"url":"https://example.com/"}],"unresponsive_engines":[["google","timeout"]]}')
+    r=DorkScraper(engine='searxng').scrape('site:example.com')
+    assert r.urls==['https://example.com/'] and 'upstream engines' in r.warning
+
+
+def test_searxng_http_403_explains_json_format(monkeypatch):
+    import requests
+    monkeypatch.setenv('SEARXNG_URL','http://localhost:8080')
+    def fail(*a,**kw):
+        response=requests.Response(); response.status_code=403
+        raise requests.HTTPError('403',response=response)
+    monkeypatch.setattr('dorkscraper.core.requests.get',fail)
+    r=DorkScraper(engine='searxng',retries=2,delay=0).scrape('site:example.com')
+    assert not r.blocked and 'enable JSON' in r.error
+
+
+def test_searxng_live_local_http_roundtrip(monkeypatch):
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlsplit
+    seen=[]
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_GET(self):
+            seen.append((urlsplit(self.path).path, parse_qs(urlsplit(self.path).query)))
+            payload=json.dumps({'results':[{'url':'https://example.com/a'},{'url':'https://outside.test/'}], 'unresponsive_engines':[]}).encode()
+            self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(payload)
+    server=ThreadingHTTPServer(('127.0.0.1',0), Handler)
+    thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
+    try:
+        monkeypatch.setenv('SEARXNG_URL','http://127.0.0.1:%s' % server.server_port)
+        r=DorkScraper(engine='searxng',retries=0).scrape('site:example.com')
+        assert r.urls==['https://example.com/a'] and r.out_of_scope_count==1
+        assert seen[0][0]=='/search' and seen[0][1]['format']==['json']
+    finally:
+        server.shutdown(); server.server_close(); thread.join()
+
+
+def test_missing_searxng_preflight(client, monkeypatch):
+    monkeypatch.delenv('SEARXNG_URL',raising=False)
+    assert client.get('/api/config').json()['searxng_configured'] is False
+    r=client.post('/api/jobs',headers=headers(),json={'queries':['test'],'engines':['searxng']})
+    assert r.status_code == 422 and 'SEARXNG_URL' in r.json()['detail']
+
+
+def test_keyless_fallback_continues_until_match_without_paid_provider(tmp_path,monkeypatch):
+    import threading
+    monkeypatch.setattr(webapp,'DB_PATH',tmp_path/'auto.db'); webapp.init_db()
+    calls=[]
+    def scrape(self, query):
+        calls.append(self.engine)
+        if self.engine=='bing_rss': return SearchResult(dork=query,engine=self.engine,urls=[])
+        return SearchResult(dork=query,engine=self.engine,urls=['https://example.com/'])
+    monkeypatch.setattr(DorkScraper,'scrape',scrape)
+    class Event(threading.Event):
+        def wait(self, timeout=None): return False
+    job={'id':'auto','created':time.time(),'queries':['site:example.com'],'engines':list(webapp.KEYLESS_FALLBACK),'pages':1,'delay':1,'keyless_fallback':True}
+    webapp.run_job(job,{},Event())
+    assert calls==['bing_rss','bing'] and job['completed']==5
+    assert all(r.get('skip_kind')=='not_needed' for r in job['results'][2:])
+    assert webapp.present_job(job)['items'][0]['url']=='https://example.com/'
+
+
+def test_keyless_mode_overrides_paid_selection(client,monkeypatch):
+    calls=[]
+    def scrape(self,query):
+        calls.append(self.engine)
+        return SearchResult(dork=query,engine=self.engine,urls=['https://example.com/'])
+    monkeypatch.setattr(DorkScraper,'scrape',scrape)
+    r=client.post('/api/jobs',headers=headers(),json={'queries':['site:example.com'],'engines':['serpapi_google'],'delay':1,'keyless_fallback':True})
+    assert r.status_code==202 and r.json()['engines']==list(webapp.KEYLESS_FALLBACK)
+    jobid=r.json()['id']
+    for _ in range(300):
+        job=client.get('/api/jobs/'+jobid).json()
+        if job['status']=='completed': break
+        time.sleep(.02)
+    assert job['status']=='completed' and calls==['bing_rss']
+
+
+def test_closed_interactive_browser_reports_short_error(monkeypatch):
+    monkeypatch.setattr('dorkscraper.core.time.sleep',lambda _:None)
+    class Closed:
+        def get(self,url): raise Exception('sensitive lengthy driver traceback')
+    monkeypatch.setattr(DorkScraper,'_get_driver',lambda self:Closed())
+    r=DorkScraper(engine='google',use_selenium=True,headless=False,manual_captcha=True,retries=2).scrape('site:example.com')
+    assert 'window was closed' in r.error and 'sensitive lengthy' not in r.error

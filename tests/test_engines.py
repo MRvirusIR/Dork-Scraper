@@ -2,7 +2,7 @@ from dorkscraper.engines import ENGINES, get_engine
 
 
 def test_all_engines_registered():
-    assert set(ENGINES) == {"google", "bing", "duckduckgo", "yahoo", "brave", "serpapi_google", "serpapi_duckduckgo"}
+    assert set(ENGINES) == {"google", "bing", "duckduckgo", "yahoo", "brave", "serpapi_google", "serpapi_duckduckgo", "bing_rss", "searxng"}
 
 
 def test_google_parse():
@@ -73,3 +73,35 @@ def test_serpapi_duckduckgo_url_and_parsing():
         params = parse_qs(urlsplit(engine.build_url('site:example.com', page)).query)
         assert params['engine'] == ['duckduckgo'] and params['start'] == [offset]
     assert engine.parse('{"organic_results":[{"link":"https://example.com/x"}]}') == ['https://example.com/x']
+
+
+def test_keyless_bing_rss_parses_only_items():
+    from urllib.parse import urlparse, parse_qs
+    engine = get_engine('bing_rss')
+    query = parse_qs(urlparse(engine.build_url('site:example.com', 1)).query)
+    assert query['format'] == ['rss'] and query['first'] == ['11']
+    rss = '''<?xml version="1.0"?><rss><channel><link>https://bing.com/</link><item><link>https://example.com/a?id=1&amp;x=2</link></item><item><link>javascript:bad</link></item></channel></rss>'''
+    assert engine.parse(rss) == ['https://example.com/a?id=1&x=2']
+    assert engine.parse('<rss><channel/></rss>') == []
+
+
+def test_keyless_bing_rejects_invalid_xml_and_entities():
+    import pytest
+    engine = get_engine('bing_rss')
+    for payload in ['<html>not rss</html>', '<rss><channel>', '<!DOCTYPE rss [<!ENTITY x "example">]><rss><channel><item><link>&x;</link></item></channel></rss>']:
+        with pytest.raises(ValueError, match='invalid RSS'):
+            engine.parse(payload)
+
+
+def test_searxng_url_validation_and_parsing(monkeypatch):
+    from urllib.parse import urlparse, parse_qs
+    import pytest
+    engine = get_engine('searxng')
+    monkeypatch.setenv('SEARXNG_URL','http://127.0.0.1:8080/prefix')
+    url = urlparse(engine.build_url('site:example.com', 1))
+    assert url.path == '/prefix/search' and parse_qs(url.query)['pageno'] == ['2']
+    assert engine.parse('{"results":[{"url":"https://example.com/a"},{"bad":1}]}') == ['https://example.com/a']
+    for host in ['http://external.test', 'https://user:pass@host.test', 'https://host.test/?x=1', 'file:///tmp']:
+        monkeypatch.setenv('SEARXNG_URL',host)
+        with pytest.raises(ValueError): engine.build_url('test', 0)
+    with pytest.raises(ValueError): engine.parse('{"error":"bad"}')

@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="workspace-token"]').content;
 let currentJob = null, timer = null, resultRows = [], cleanRows = [];
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
-const engineName = s => ({serpapi_google:'Google via SerpApi', serpapi_duckduckgo:'DuckDuckGo via SerpApi', duckduckgo:'DuckDuckGo'})[s] || cap(s);
+const engineName = s => ({serpapi_google:'Google via SerpApi', serpapi_duckduckgo:'DuckDuckGo via SerpApi', duckduckgo:'DuckDuckGo', bing_rss:'Bing RSS · no key', searxng:'SearXNG · no key'})[s] || cap(s);
 let toastTimer;
 function toast(message) { $('toast').textContent = message; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500); }
 async function api(path, method='GET', body) {
@@ -45,17 +45,17 @@ function renderJob(job) {
   const running=['queued','running'].includes(job.status);
   $('cancel').hidden=!running; $('progress-wrap').hidden=false;
   $('progress').style.width=`${job.total ? Math.round(job.completed / job.total * 100) : 0}%`;
-  const failed=job.results.some(r=>r.blocked || r.error || r.skipped_reason);
+  const failed=job.results.some(r=>r.blocked || r.error || (r.skipped_reason && r.skip_kind!=='not_needed'));
   const label=job.status==='completed' ? (failed ? 'Finished with provider errors' : 'Finished') : cap(job.status);
-  $('progress-label').textContent=`${label} · ${job.completed} / ${job.total} searches processed`;
+  $('progress-label').textContent=`${label} · ${job.completed} / ${job.total} searches processed${job.notice ? ' · '+job.notice : ''}`;
   $('result-subtitle').textContent=job.queries.join('  ·  ');
-  const statuses=job.results.map(r => {const div=document.createElement('div'); div.className='status-item'+(r.blocked || r.error || r.skipped_reason ? ' error' : ''); const effective=r.effective_query && r.effective_query !== r.query ? ` · Sent: ${r.effective_query}` : ''; const literal=r.literal_filter ? ` · Exact URL contains ${r.literal_filter}: ${r.literal_filtered_count || 0} removed` : ''; const scope=r.scope_warning ? ` · ${r.scope_warning}` : ` · Scope guard: ${r.out_of_scope_count || 0} out-of-scope URLs removed`; div.textContent=`${engineName(r.engine)} · ${r.query} — ${r.skipped_reason || (r.blocked ? (r.error || 'Blocked / CAPTCHA') : r.error ? 'Error: '+r.error : `${r.urls.length} URLs · ${r.pages_fetched} pages`)}${scope}${literal}${effective}`; return div;});
+  const statuses=job.results.map(r => {const div=document.createElement('div'); div.className='status-item'+(r.blocked || r.error || (r.skipped_reason && r.skip_kind!=='not_needed') ? ' error' : ''); const warning=r.warning ? ` · Warning: ${r.warning}` : ''; const effective=r.effective_query && r.effective_query !== r.query ? ` · Sent: ${r.effective_query}` : ''; const literal=r.literal_filter ? ` · Exact URL contains ${r.literal_filter}: ${r.literal_filtered_count || 0} removed` : ''; const scope=r.scope_warning ? ` · ${r.scope_warning}` : ` · Scope guard: ${r.out_of_scope_count || 0} out-of-scope URLs removed`; div.textContent=`${engineName(r.engine)} · ${r.query} — ${r.skipped_reason || (r.blocked ? (r.error || 'Blocked / CAPTCHA') : r.error ? 'Error: '+r.error : `${r.urls.length} URLs · ${r.pages_fetched} pages`)}${scope}${literal}${effective}${warning}`; return div;});
   if(job.error) { const div=document.createElement('div'); div.className='status-item error'; div.textContent=job.error; statuses.push(div); }
   setChildren($('search-status'),statuses);
   resultRows=job.items || []; renderResults();
   if(running) { clearTimeout(timer); timer=setTimeout(async()=>{try {renderJob(await api('/api/jobs/'+job.id));} catch(e) {toast(e.message);}},1200); }
 }
-$('search-form').addEventListener('submit', async e=>{e.preventDefault(); const queries=lines($('queries').value); const engines=[...document.querySelectorAll('#engines input:checked')].map(e=>e.value); if(!engines.length) return toast('Choose at least one search engine.'); if(!queries.length) return toast('Enter a search query.'); const button=e.submitter; button.disabled=true; try {const job=await api('/api/jobs','POST',{queries,engines,pages:Number($('pages').value),delay:Number($('delay').value),options:opts('search')}); $('result-filter').value=''; if(job.queries.join('\n') !== queries.join('\n')) { $('queries').value=job.queries.join('\n'); $('query-warning').hidden=true; toast('Copied code spans were separated into individual queries.'); } renderJob(job); } catch(err){toast(err.message);} finally {button.disabled=false;} });
+$('search-form').addEventListener('submit', async e=>{e.preventDefault(); const queries=lines($('queries').value); const engines=[...document.querySelectorAll('#engines input:checked')].map(e=>e.value); if(!engines.length && !$('keyless-fallback').checked) return toast('Choose at least one search engine.'); if(!queries.length) return toast('Enter a search query.'); const button=e.submitter; button.disabled=true; try {const job=await api('/api/jobs','POST',{queries,engines,keyless_fallback:$('keyless-fallback').checked,manual_browser:$('manual-browser').checked,pages:Number($('pages').value),delay:Number($('delay').value),options:opts('search')}); $('result-filter').value=''; if(job.queries.join('\n') !== queries.join('\n')) { $('queries').value=job.queries.join('\n'); $('query-warning').hidden=true; toast('Copied code spans were separated into individual queries.'); } renderJob(job); } catch(err){toast(err.message);} finally {button.disabled=false;} });
 $('cancel').addEventListener('click',async()=>{if(!currentJob)return; try{const r=await api(`/api/jobs/${currentJob.id}/cancel`,'POST');toast(r.message);}catch(e){toast(e.message);}});
 $('clean-form').addEventListener('submit',async e=>{e.preventDefault(); try {const data=await api('/api/clean','POST',{urls:lines($('urls').value),options:opts('clean')}); cleanRows=data.items; $('clean-count').textContent=data.output_count; $('clean-summary').textContent=`${data.input_count} input · ${data.output_count} kept · ${data.removed_count} removed`; setChildren($('clean-results'),cleanRows.length ? cleanRows.map(r=>urlRow(r.url,r.original!==r.url ? `Original: ${r.original}` : 'Unchanged')) : [empty('No URLs kept','Check your input and filters.')]); $('clean-export').disabled=!cleanRows.length; $('clean-json').disabled=!cleanRows.length; } catch(err){toast(err.message);} });
 $('clean-export').onclick=()=>download('clean-urls.txt',cleanRows.map(x=>x.url).join('\n')+'\n','text/plain');
@@ -69,10 +69,11 @@ async function setup(){
     const nodes=config.engines.map(engine=>{
       const label=document.createElement('label'); label.className='engine';
       const input=document.createElement('input'); input.type='checkbox'; input.value=engine;
+      const needsHost=engine==='searxng'&&!config.searxng_configured;
       const needsKey=(engine==='brave'&&!config.brave_configured) || (engine.startsWith('serpapi_')&&!config.serpapi_google_configured);
-      input.disabled=needsKey;
-      input.checked=config.serpapi_google_configured ? engine==='serpapi_google' : (config.brave_configured ? engine==='brave' : engine==='duckduckgo');
-      const text=document.createElement('span'); text.textContent=engineName(engine)+(needsKey ? ' · API key required' : '');
+      input.disabled=needsKey || needsHost;
+      input.checked=engine==='bing_rss';
+      const text=document.createElement('span'); text.textContent=engineName(engine)+(needsKey ? ' · API key required' : needsHost ? ' · configure instance' : '');
       label.append(input,text); return label;
     });
     setChildren($('engines'),nodes);
