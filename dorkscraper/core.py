@@ -97,10 +97,10 @@ class DorkScraper:
             headers["X-Subscription-Token"] = key
             headers["Accept"] = "application/json"
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
-        if self.engine.lower() == "serpapi_google":
+        if self.engine.lower() in ("serpapi_google", "serpapi_duckduckgo"):
             key = os.environ.get("SERPAPI_API_KEY")
             if not key:
-                raise ValueError("SerpApi Google requires the SERPAPI_API_KEY environment variable")
+                raise ValueError("SerpApi requires the SERPAPI_API_KEY environment variable")
             # SerpApi documents API key as a query parameter. Never propagate
             # request exceptions, which may contain the full credential-bearing URL.
             try:
@@ -150,12 +150,12 @@ class DorkScraper:
         last_exc: Optional[Exception] = None
         if self.engine.lower() == "brave" and not os.environ.get("BRAVE_API_KEY"):
             raise ValueError("Brave requires the BRAVE_API_KEY environment variable")
-        if self.engine.lower() == "serpapi_google" and not os.environ.get("SERPAPI_API_KEY"):
-            raise ValueError("SerpApi Google requires the SERPAPI_API_KEY environment variable")
-        if self.engine.lower() in ("brave", "serpapi_google") and self.use_selenium:
+        if self.engine.lower() in ("serpapi_google", "serpapi_duckduckgo") and not os.environ.get("SERPAPI_API_KEY"):
+            raise ValueError("SerpApi requires the SERPAPI_API_KEY environment variable")
+        if self.engine.lower() in ("brave", "serpapi_google", "serpapi_duckduckgo") and self.use_selenium:
             raise ValueError("API providers cannot be used with Selenium")
         # Never retry potentially billable SerpApi searches automatically.
-        attempts = 1 if self.engine.lower() == "serpapi_google" else self.retries + 1
+        attempts = 1 if self.engine.lower() in ("serpapi_google", "serpapi_duckduckgo") else self.retries + 1
         for attempt in range(1, attempts + 1):
             try:
                 if self.use_selenium:
@@ -180,10 +180,14 @@ class DorkScraper:
         engine: Engine = get_engine(self.engine)
         result = SearchResult(dork=dork, engine=engine.name, effective_query=engine_query(dork))
         collected: List[str] = []
+        offset = 0
         for page in range(self.pages):
             self._emit("info", f"[{engine.name}] page {page + 1}/{self.pages}: {dork}")
             try:
-                page_url = engine.build_url(result.effective_query, page)
+                if engine.name == "serpapi_duckduckgo":
+                    page_url = engine.build_offset_url(result.effective_query, offset)
+                else:
+                    page_url = engine.build_url(result.effective_query, page)
                 html = self._fetch(page_url)
             except Exception as exc:  # noqa: BLE001
                 if isinstance(exc, requests.HTTPError) and exc.response is not None:
@@ -218,6 +222,18 @@ class DorkScraper:
                     self._emit("warn", result.error)
                 break
             if page + 1 < self.pages:
+                if engine.name == "serpapi_duckduckgo":
+                    try:
+                        next_offset = engine.next_offset(html)
+                        if next_offset is None:
+                            break
+                        if next_offset <= offset:
+                            raise ValueError("Invalid SerpApi pagination offset")
+                        offset = next_offset
+                    except (ValueError, TypeError, AttributeError) as exc:
+                        result.error = str(exc)
+                        self._emit("error", result.error)
+                        break
                 self._sleep_between()
         # Validate URLs and enforce site: before deduplication so an unrelated
         # result can never replace an in-scope result in pattern/domain mode.

@@ -253,6 +253,10 @@ def create_job(body: SearchRequest):
         raise HTTPException(422, 'Provide 1–20 queries, each up to 600 characters')
     if not engines or any(e not in ENGINES for e in engines):
         raise HTTPException(422, 'Select valid search engines')
+    if 'brave' in engines and not os.environ.get('BRAVE_API_KEY'):
+        raise HTTPException(422, 'Brave requires BRAVE_API_KEY; configure it or deselect Brave.')
+    if any(e in engines for e in ('serpapi_google', 'serpapi_duckduckgo')) and not os.environ.get('SERPAPI_API_KEY'):
+        raise HTTPException(422, 'SerpApi requires SERPAPI_API_KEY; configure it or deselect its engines.')
     opts = options_dict(body.options)
     with DB_LOCK:
         if len(CANCEL) >= 1:

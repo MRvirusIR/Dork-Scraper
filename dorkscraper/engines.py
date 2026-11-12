@@ -191,6 +191,37 @@ class SerpApiGoogleEngine(Engine):
     def is_blocked(html: str) -> bool:
         return False
 
+
+class SerpApiDuckDuckGoEngine(SerpApiGoogleEngine):
+    """DuckDuckGo organic results via the optional third-party SerpApi service."""
+    name = "serpapi_duckduckgo"
+    per_page = 50
+
+    def build_url(self, dork: str, page: int) -> str:
+        # DuckDuckGo's initial response contains at most 11 organic results;
+        # subsequent pages can contain up to 50.
+        start = 0 if page == 0 else 11 + (page - 1) * self.per_page
+        return self.build_offset_url(dork, start)
+
+    def build_offset_url(self, dork: str, start: int) -> str:
+        params = {"engine": "duckduckgo", "q": dork, "start": start, "output": "json"}
+        return "https://serpapi.com/search.json?" + urllib.parse.urlencode(params)
+
+    def next_offset(self, html: str):
+        data = json.loads(html)
+        pagination = data.get("serpapi_pagination") or {}
+        if not isinstance(pagination, dict):
+            raise ValueError("Invalid SerpApi pagination")
+        link = pagination.get("next")
+        if not link:
+            return None
+        if not isinstance(link, str):
+            raise ValueError("Invalid SerpApi pagination")
+        starts = urllib.parse.parse_qs(urllib.parse.urlsplit(link).query).get("start", [])
+        if len(starts) != 1 or not starts[0].isdigit() or len(starts[0]) > 8:
+            raise ValueError("Invalid SerpApi pagination offset")
+        return int(starts[0])
+
 def _decode_bing(href: str) -> str:
     """Bing sometimes wraps results in bing.com/ck/a?...&u=a1<base64>."""
     if "bing.com/ck/a" not in href:
@@ -213,7 +244,7 @@ def _is_engine_internal(url: str, needles) -> bool:
 
 
 ENGINES: Dict[str, Type[Engine]] = {
-    cls.name: cls for cls in (GoogleEngine, BingEngine, DuckDuckGoEngine, YahooEngine, BraveEngine, SerpApiGoogleEngine)
+    cls.name: cls for cls in (GoogleEngine, BingEngine, DuckDuckGoEngine, YahooEngine, BraveEngine, SerpApiGoogleEngine, SerpApiDuckDuckGoEngine)
 }
 
 

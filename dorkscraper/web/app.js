@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="workspace-token"]').content;
 let currentJob = null, timer = null, resultRows = [], cleanRows = [];
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
-const engineName = s => s === 'serpapi_google' ? 'Google via SerpApi' : cap(s);
+const engineName = s => ({serpapi_google:'Google via SerpApi', serpapi_duckduckgo:'DuckDuckGo via SerpApi', duckduckgo:'DuckDuckGo'})[s] || cap(s);
 let toastTimer;
 function toast(message) { $('toast').textContent = message; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500); }
 async function api(path, method='GET', body) {
@@ -63,5 +63,20 @@ $('clean-json').onclick=()=>download('clean-urls.json',JSON.stringify(cleanRows,
 $('file').addEventListener('change',async e=>{const f=e.target.files[0]; if(!f)return; if(f.size>2*1024*1024){toast('File exceeds the 2 MB limit.'); e.target.value=''; return;} try{$('urls').value=await f.text(); $('file-label').textContent=f.name;}catch(_){toast('Could not read this file.');}});
 async function loadHistory(){try {const jobs=await api('/api/jobs'); const nodes=jobs.map(j=>{const row=document.createElement('div');row.className='history-row';const info=document.createElement('div');const b=document.createElement('b');b.textContent=j.queries.join(' · ');const sm=document.createElement('small');sm.textContent=`${new Date(j.created*1000).toLocaleString()} · ${j.engines.join(', ')} · ${j.status} · ${j.completed}/${j.total}`;info.append(b,sm);const actions=document.createElement('div');actions.className='actions';const open=document.createElement('button');open.className='secondary';open.textContent='Open';open.onclick=()=>{clearTimeout(timer);view('search');renderJob(j);};const del=document.createElement('button');del.className='secondary';del.textContent='Delete';del.onclick=async()=>{if(!confirm('Delete this search history?'))return;try{await api('/api/jobs/'+j.id,'DELETE');loadHistory();}catch(e){toast(e.message);}};actions.append(open,del);row.append(info,actions);return row;});setChildren($('history-list'),nodes.length?nodes:[empty('No searches yet','Your completed searches will appear here.')]);}catch(e){toast(e.message);}}
 $('refresh-history').onclick=loadHistory;
-async function setup(){try {const config=await api('/api/config');const nodes=config.engines.map(engine=>{const label=document.createElement('label');label.className='engine';const input=document.createElement('input');input.type='checkbox';input.value=engine;input.checked=engine==='duckduckgo'; const text=document.createElement('span'); text.textContent=(engine==='serpapi_google' ? 'Google via SerpApi' : cap(engine)) + ((engine==='brave'&&!config.brave_configured) || (engine==='serpapi_google'&&!config.serpapi_google_configured) ? ' · API key required' : '');label.append(input,text);return label;});setChildren($('engines'),nodes); const jobs=await api('/api/jobs'); const active=jobs.find(j=>['running','queued'].includes(j.status));if(active)renderJob(active);}catch(e){toast(e.message);}}
+async function setup(){
+  try {
+    const config=await api('/api/config');
+    const nodes=config.engines.map(engine=>{
+      const label=document.createElement('label'); label.className='engine';
+      const input=document.createElement('input'); input.type='checkbox'; input.value=engine;
+      const needsKey=(engine==='brave'&&!config.brave_configured) || (engine.startsWith('serpapi_')&&!config.serpapi_google_configured);
+      input.disabled=needsKey;
+      input.checked=config.serpapi_google_configured ? engine==='serpapi_google' : (config.brave_configured ? engine==='brave' : engine==='duckduckgo');
+      const text=document.createElement('span'); text.textContent=engineName(engine)+(needsKey ? ' · API key required' : '');
+      label.append(input,text); return label;
+    });
+    setChildren($('engines'),nodes);
+    const jobs=await api('/api/jobs'); const active=jobs.find(j=>['running','queued'].includes(j.status)); if(active)renderJob(active);
+  }catch(e){toast(e.message);}
+}
 setup();
