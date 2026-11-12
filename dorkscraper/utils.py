@@ -26,7 +26,7 @@ def normalize_url(url: str, strip_tracking: bool = True, trailing_slash: bool = 
     query = parsed.query
     if strip_tracking and query:
         pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
-        pairs = [(k, v) for k, v in pairs if k.lower() not in TRACKING_PARAMS]
+        pairs = [(k, v) for k, v in pairs if k.lower() not in TRACKING_PARAMS and not k.lower().startswith("utm_")]
         query = urllib.parse.urlencode(pairs, doseq=True, safe="/:,")
     path = parsed.path or "/"
     if trailing_slash and not query and not path.endswith("/") and "." not in path.rsplit("/", 1)[-1]:
@@ -94,8 +94,12 @@ def is_static_asset(url: str) -> bool:
 
 
 def matches_domain_filter(url: str, patterns: Sequence[str]) -> bool:
-    domain = get_domain(url)
-    return any(fnmatch.fnmatch(domain, p.lower()) for p in patterns)
+    try:
+        # Filter against the actual hostname: do not strip www or include a port.
+        domain = (urllib.parse.urlsplit(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return any(fnmatch.fnmatchcase(domain, p.lower().rstrip(".")) for p in patterns)
 
 
 def clean_urls(
@@ -117,8 +121,18 @@ def clean_urls(
     for raw in urls:
         if not raw or not raw.strip():
             continue
-        url = normalize_url(raw, strip_tracking=strip_tracking, trailing_slash=trailing_slash)
-        if not url.startswith("http"):
+        try:
+            url = normalize_url(raw, strip_tracking=strip_tracking, trailing_slash=trailing_slash)
+        except ValueError:
+            continue
+        try:
+            parsed = urllib.parse.urlsplit(url)
+            if (parsed.scheme.lower() not in ("http", "https") or not parsed.hostname
+                    or parsed.username is not None or parsed.password is not None
+                    or any(c.isspace() for c in parsed.netloc)):
+                continue
+            _ = parsed.port  # validate invalid ports and malformed IPv6
+        except ValueError:
             continue
         if drop_static and is_static_asset(url):
             continue

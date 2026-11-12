@@ -1,0 +1,118 @@
+'use strict';
+const $ = id => document.getElementById(id);
+const token = document.querySelector('meta[name="workspace-token"]').content;
+let currentJob = null, timer = null, resultRows = [], cleanRows = [], providerConfig = {};
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const engineName = s => ({serpapi_google:'Google via SerpApi', serpapi_duckduckgo:'DuckDuckGo via SerpApi', duckduckgo:'DuckDuckGo', bing_rss:'Bing RSS · no key', searxng:'SearXNG · no key'})[s] || cap(s);
+let toastTimer;
+function toast(message) { $('toast').textContent = message; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500); }
+async function api(path, method='GET', body) {
+  const response = await fetch(path, {method, headers: {'X-Workspace-Token': token, ...(body ? {'Content-Type':'application/json'} : {})}, body: body ? JSON.stringify(body) : undefined});
+  let data; try { data = await response.json(); } catch (_) { throw new Error('Unexpected server response'); }
+  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Invalid request');
+  return data;
+}
+function view(name) {
+  document.querySelectorAll('.view').forEach(e => e.hidden = e.id !== `${name}-view`);
+  document.querySelectorAll('.nav').forEach(e => e.classList.toggle('active', e.dataset.view === name));
+  $('breadcrumb').textContent = name.toUpperCase();
+  if (name === 'history') loadHistory();
+}
+document.querySelectorAll('.nav').forEach(e => e.addEventListener('click', () => view(e.dataset.view)));
+$('theme').addEventListener('click', () => { document.body.classList.toggle('light'); localStorage.setItem('dork-theme', document.body.classList.contains('light') ? 'light' : 'dark'); });
+const savedTheme = localStorage.getItem('dork-theme');
+if (savedTheme === 'light' || (!savedTheme && matchMedia('(prefers-color-scheme: light)').matches)) document.body.classList.add('light');
+function opts(prefix) { return {strip_tracking: $(`${prefix}-track`).checked, drop_static: $(`${prefix}-static`).checked, params_only: $(`${prefix}-params`).checked, unique_mode: $(`${prefix}-unique`).value, include_domains: $(`${prefix}-domain`).value.split(',').map(x => x.trim()).filter(Boolean), exclude_domains: []}; }
+function lines(s) { return s.split(/\r?\n/).map(x=>x.trim()).filter(Boolean); }
+$('queries').addEventListener('input', () => { const multi = lines($('queries').value).some(line => (line.match(/(?:^|\s)site:/gi) || []).length > 1 && !line.includes('`')); $('query-warning').hidden = !multi; });
+function setChildren(container, nodes) { container.replaceChildren(...nodes); }
+function empty(title, description) { const box = document.createElement('div'); box.className='empty'; const b=document.createElement('b'); b.textContent=title; const p=document.createElement('p'); p.textContent=description; box.append(b,p); return box; }
+function urlRow(url, detail) { const row=document.createElement('div'); row.className='result-row'; const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener noreferrer'; a.textContent=url; const sub=document.createElement('small'); sub.textContent=detail; row.append(a,sub); return row; }
+function download(filename, data, type) { const blob = new Blob([data], {type}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(url), 1000); }
+function safeCsv(value) { let s=String(value); if (/^[\s\x00-\x1f]*[=+@\-\t\r]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; }
+function renderResults() {
+  const needle=$('result-filter').value.toLowerCase(); const filtered=resultRows.filter(r => `${r.url} ${r.sources.join(' ')}`.toLowerCase().includes(needle));
+  $('result-count').textContent=String(resultRows.length);
+  setChildren($('search-results'), filtered.length ? filtered.map(r=>urlRow(r.url, r.sources.join('  ·  '))) : [empty('No results to show', resultRows.length ? 'Try another filter.' : 'No matching URLs were returned. Check provider errors and filters; this does not prove URLs do not exist.')]);
+  $('result-controls').hidden = resultRows.length === 0;
+}
+$('result-filter').addEventListener('input', renderResults);
+$('export-txt').onclick=()=>download('dork-results.txt', resultRows.map(r=>r.url).join('\n')+'\n','text/plain');
+$('export-json').onclick=()=>download('dork-results.json', JSON.stringify({job:currentJob, urls:resultRows},null,2),'application/json');
+$('export-csv').onclick=()=>download('dork-results.csv', ['url,sources',...resultRows.map(r=>[r.url,r.sources.join(' | ')].map(safeCsv).join(','))].join('\r\n')+'\r\n','text/csv');
+function renderJob(job) {
+  currentJob=job;
+  const running=['queued','running'].includes(job.status);
+  $('cancel').hidden=!running; $('progress-wrap').hidden=false;
+  $('progress').style.width=`${job.total ? Math.round(job.completed / job.total * 100) : 0}%`;
+  const failed=job.results.some(r=>r.blocked || r.error || (r.skipped_reason && r.skip_kind!=='not_needed'));
+  const label=job.status==='completed' ? (failed ? 'Finished with provider errors' : 'Finished') : cap(job.status);
+  $('progress-label').textContent=`${label} · ${job.completed} / ${job.total} searches processed${job.notice ? ' · '+job.notice : ''}`;
+  $('result-subtitle').textContent=job.queries.join('  ·  ');
+  const statuses=job.results.map(r => {const div=document.createElement('div'); div.className='status-item'+(r.blocked || r.error || (r.skipped_reason && r.skip_kind!=='not_needed') ? ' error' : ''); const warning=r.warning ? ` · Warning: ${r.warning}` : ''; const effective=r.effective_query && r.effective_query !== r.query ? ` · Sent: ${r.effective_query}` : ''; const literal=r.literal_filter ? ` · Exact URL contains ${r.literal_filter}: ${r.literal_filtered_count || 0} removed` : ''; const scope=r.scope_warning ? ` · ${r.scope_warning}` : ` · Scope guard: ${r.out_of_scope_count || 0} out-of-scope URLs removed`; div.textContent=`${engineName(r.engine)} · ${r.query} — ${r.skipped_reason || (r.blocked ? (r.error || 'Blocked / CAPTCHA') : r.error ? 'Error: '+r.error : `${r.urls.length} URLs · ${r.pages_fetched} pages`)}${scope}${literal}${effective}${warning}`; return div;});
+  if(job.error) { const div=document.createElement('div'); div.className='status-item error'; div.textContent=job.error; statuses.push(div); }
+  setChildren($('search-status'),statuses);
+  resultRows=job.items || []; renderResults();
+  if(running) { clearTimeout(timer); timer=setTimeout(async()=>{try {renderJob(await api('/api/jobs/'+job.id));} catch(e) {toast(e.message);}},1200); }
+}
+function missingSetup(engine) {
+  if (engine==='brave' && !providerConfig.brave_configured) return 'Brave API key';
+  if (engine.startsWith('serpapi_') && !providerConfig.serpapi_google_configured) return 'SerpApi API key';
+  if (engine==='searxng' && !providerConfig.searxng_configured) return 'SearXNG instance URL';
+  return '';
+}
+function refreshProviderStatus(config) {
+  providerConfig=config;
+  for (const input of document.querySelectorAll('#engines input')) {
+    const missing=missingSetup(input.value);
+    input.parentElement.querySelector('span').textContent=engineName(input.value)+(missing ? ' · setup required' : '');
+  }
+  $('serpapi-state').textContent=config.serpapi_google_configured ? '· key set' : '· not set';
+  $('brave-state').textContent=config.brave_configured ? '· key set' : '· not set';
+  $('searx-state').textContent=config.searxng_configured ? '· URL set' : '· not set';
+}
+function showSetup(message) { $('provider-settings').open=true; $('provider-message').textContent=message; toast(message); }
+$('save-providers').addEventListener('click',async()=>{
+  const values={SERPAPI_API_KEY:$('serpapi-key').value, BRAVE_API_KEY:$('brave-key').value, SEARXNG_URL:$('searx-url').value};
+  const updates=Object.fromEntries(Object.entries(values).filter(([,v])=>v.trim()));
+  if(!Object.keys(updates).length) { $('provider-message').textContent='Enter a value to save, or use Clear to remove one.'; return; }
+  try { refreshProviderStatus(await api('/api/config','POST',updates)); $('provider-message').textContent='Settings saved for this session. Provider access and quota have not been verified.'; }
+  catch(e) { $('provider-message').textContent=e.message; }
+  finally { $('serpapi-key').value=''; $('brave-key').value=''; $('searx-url').value=''; }
+});
+document.querySelectorAll('[data-clear-setting]').forEach(button=>button.addEventListener('click',async()=>{
+  try { refreshProviderStatus(await api('/api/config','POST',{[button.dataset.clearSetting]:''})); $('provider-message').textContent='Cleared for this session. Values set in the environment return after restart.'; }
+  catch(e) { $('provider-message').textContent=e.message; }
+}));
+$('search-form').addEventListener('submit', async e=>{
+  e.preventDefault(); const queries=lines($('queries').value); const engines=[...document.querySelectorAll('#engines input:checked')].map(e=>e.value);
+  const keyless=$('keyless-fallback').checked;
+  if(!engines.length && !keyless) return toast('Choose at least one search engine.');
+  if(!queries.length) return toast('Enter a search query.');
+  if(!keyless) { const missing=[...new Set(engines.map(missingSetup).filter(Boolean))]; if(missing.length) return showSetup('Set '+missing.join(' and ')+' before searching, or deselect the provider.'); }
+  const button=e.submitter; button.disabled=true;
+  try {const job=await api('/api/jobs','POST',{queries,engines,keyless_fallback:keyless,manual_browser:$('manual-browser').checked,pages:Number($('pages').value),delay:Number($('delay').value),options:opts('search')}); $('result-filter').value=''; if(job.queries.join('\n') !== queries.join('\n')) { $('queries').value=job.queries.join('\n'); $('query-warning').hidden=true; toast('Copied code spans were separated into individual queries.'); } renderJob(job); }
+  catch(err){toast(err.message);} finally {button.disabled=false;}
+});
+$('cancel').addEventListener('click',async()=>{if(!currentJob)return; try{const r=await api(`/api/jobs/${currentJob.id}/cancel`,'POST');toast(r.message);}catch(e){toast(e.message);}});
+$('clean-form').addEventListener('submit',async e=>{e.preventDefault(); try {const data=await api('/api/clean','POST',{urls:lines($('urls').value),options:opts('clean')}); cleanRows=data.items; $('clean-count').textContent=data.output_count; $('clean-summary').textContent=`${data.input_count} input · ${data.output_count} kept · ${data.removed_count} removed`; setChildren($('clean-results'),cleanRows.length ? cleanRows.map(r=>urlRow(r.url,r.original!==r.url ? `Original: ${r.original}` : 'Unchanged')) : [empty('No URLs kept','Check your input and filters.')]); $('clean-export').disabled=!cleanRows.length; $('clean-json').disabled=!cleanRows.length; } catch(err){toast(err.message);} });
+$('clean-export').onclick=()=>download('clean-urls.txt',cleanRows.map(x=>x.url).join('\n')+'\n','text/plain');
+$('clean-json').onclick=()=>download('clean-urls.json',JSON.stringify(cleanRows,null,2),'application/json');
+$('file').addEventListener('change',async e=>{const f=e.target.files[0]; if(!f)return; if(f.size>2*1024*1024){toast('File exceeds the 2 MB limit.'); e.target.value=''; return;} try{$('urls').value=await f.text(); $('file-label').textContent=f.name;}catch(_){toast('Could not read this file.');}});
+async function loadHistory(){try {const jobs=await api('/api/jobs'); const nodes=jobs.map(j=>{const row=document.createElement('div');row.className='history-row';const info=document.createElement('div');const b=document.createElement('b');b.textContent=j.queries.join(' · ');const sm=document.createElement('small');sm.textContent=`${new Date(j.created*1000).toLocaleString()} · ${j.engines.join(', ')} · ${j.status} · ${j.completed}/${j.total}`;info.append(b,sm);const actions=document.createElement('div');actions.className='actions';const open=document.createElement('button');open.className='secondary';open.textContent='Open';open.onclick=()=>{clearTimeout(timer);view('search');renderJob(j);};const del=document.createElement('button');del.className='secondary';del.textContent='Delete';del.onclick=async()=>{if(!confirm('Delete this search history?'))return;try{await api('/api/jobs/'+j.id,'DELETE');loadHistory();}catch(e){toast(e.message);}};actions.append(open,del);row.append(info,actions);return row;});setChildren($('history-list'),nodes.length?nodes:[empty('No searches yet','Your completed searches will appear here.')]);}catch(e){toast(e.message);}}
+$('refresh-history').onclick=loadHistory;
+async function setup(){
+  try {
+    const config=await api('/api/config');
+    const nodes=config.engines.map(engine=>{
+      const label=document.createElement('label'); label.className='engine';
+      const input=document.createElement('input'); input.type='checkbox'; input.value=engine; input.checked=engine==='bing_rss';
+      const text=document.createElement('span'); label.append(input,text);
+      input.addEventListener('change',()=>{if(input.checked && ['brave','searxng','serpapi_google','serpapi_duckduckgo'].includes(engine) && $('keyless-fallback').checked) { $('keyless-fallback').checked=false; toast('Keyless fallback turned off; the selected engines will be used.'); } const missing=missingSetup(engine); if(input.checked && missing) showSetup('Set '+missing+' in provider settings before searching.');});
+      return label;
+    });
+    setChildren($('engines'),nodes); refreshProviderStatus(config);
+    const jobs=await api('/api/jobs'); const active=jobs.find(j=>['running','queued'].includes(j.status)); if(active)renderJob(active);
+  }catch(e){toast(e.message);}
+}
+setup();

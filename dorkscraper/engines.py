@@ -7,11 +7,14 @@ and how to extract result URLs from the returned HTML.
 from __future__ import annotations
 
 import base64
+import json
+import os
 import urllib.parse
 from abc import ABC, abstractmethod
 from typing import Dict, List, Type
 
 from bs4 import BeautifulSoup
+from defusedxml import ElementTree as SafeXML
 
 
 class Engine(ABC):
@@ -33,7 +36,9 @@ class Engine(ABC):
         lowered = html.lower()
         markers = (
             "unusual traffic",
-            "captcha",
+            "g-recaptcha",
+            "please complete the following challenge",
+            "captcha-delivery",
             "/sorry/index",
             "detected unusual",
             "anomaly-modal",
@@ -88,6 +93,31 @@ class BingEngine(Engine):
         return [u for u in urls if u.startswith("http")]
 
 
+class BingRSSEngine(Engine):
+    """Bing's keyless RSS search interface, subject to upstream limits."""
+    name = "bing_rss"
+    per_page = 10
+
+    def build_url(self, dork: str, page: int) -> str:
+        return "https://www.bing.com/search?" + urllib.parse.urlencode(
+            {"q": dork, "format": "rss", "count": self.per_page,
+             "first": page * self.per_page + 1})
+
+    def parse(self, text: str) -> List[str]:
+        try:
+            root = SafeXML.fromstring(text)
+        except Exception as exc:
+            raise ValueError("Bing returned invalid RSS") from exc
+        if root.tag != "rss" or root.find("channel") is None:
+            raise ValueError("Bing returned invalid RSS")
+        urls = []
+        for item in root.findall("./channel/item"):
+            url = (item.findtext("link") or "").strip()
+            if url.startswith(("http://", "https://")):
+                urls.append(url)
+        return urls
+
+
 class DuckDuckGoEngine(Engine):
     name = "duckduckgo"
     per_page = 30
@@ -132,6 +162,137 @@ class YahooEngine(Engine):
         return urls
 
 
+
+class BraveEngine(Engine):
+    """Official Brave Search API (requires BRAVE_API_KEY in the environment)."""
+    name = "brave"
+    per_page = 20
+
+    def build_url(self, dork: str, page: int) -> str:
+        if page > 9:
+            raise ValueError("Brave supports at most 10 result pages")
+        return "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode(
+            {"q": dork, "count": self.per_page, "offset": page, "result_filter": "web"})
+
+    def parse(self, html: str) -> List[str]:
+        data = json.loads(html)
+        return [item["url"] for item in (data.get("web") or {}).get("results", [])
+                if isinstance(item, dict) and isinstance(item.get("url"), str)]
+
+    @staticmethod
+    def is_blocked(html: str) -> bool:
+        return False
+
+
+def validate_searxng_url(base: str) -> str:
+    """Validate an explicitly configured instance without sending a request."""
+    base = base.strip()
+    if any(ord(c) <= 32 or ord(c) == 127 for c in base):
+        raise ValueError("Invalid SearXNG URL")
+    try:
+        parsed = urllib.parse.urlsplit(base)
+        host = parsed.hostname
+        _ = parsed.port
+    except ValueError:
+        raise ValueError("Invalid SearXNG URL") from None
+    if (not host or parsed.scheme not in ("http", "https") or parsed.username or parsed.password
+            or parsed.query or parsed.fragment
+            or (parsed.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"))):
+        raise ValueError("SearXNG URL must be HTTPS or local HTTP, without credentials or query")
+    return base.rstrip('/')
+
+
+class SearXNGEngine(Engine):
+    """A user-configured SearXNG instance with JSON enabled; no key."""
+    name = "searxng"
+
+    def __init__(self):
+        self.instance_url = None
+
+    def build_url(self, dork: str, page: int) -> str:
+        base = self.instance_url if self.instance_url is not None else os.environ.get("SEARXNG_URL", "")
+        parsed = urllib.parse.urlsplit(validate_searxng_url(base))
+        path = parsed.path.rstrip('/') + '/search'
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, urllib.parse.urlencode(
+            {"q": dork, "format": "json", "pageno": page + 1}), ''))
+
+    def parse(self, text: str) -> List[str]:
+        data = json.loads(text)
+        if not isinstance(data, dict) or not isinstance(data.get('results'), list):
+            raise ValueError("Invalid SearXNG JSON response; enable JSON format on the instance")
+        return [item['url'] for item in data['results'] if isinstance(item, dict)
+                and isinstance(item.get('url'), str)]
+
+    @staticmethod
+    def is_blocked(text: str) -> bool:
+        return False
+
+
+class SerpApiGoogleEngine(Engine):
+    """Google results via the optional third-party SerpApi service."""
+    name = "serpapi_google"
+    per_page = 10
+
+    def build_url(self, dork: str, page: int) -> str:
+        params = {"engine": "google", "q": dork, "start": page * self.per_page, "output": "json"}
+        return "https://serpapi.com/search.json?" + urllib.parse.urlencode(params)
+
+    def parse(self, html: str) -> List[str]:
+        data = json.loads(html)
+        if not isinstance(data, dict):
+            raise ValueError("Invalid SerpApi response")
+        metadata = data.get("search_metadata") or {}
+        if not isinstance(metadata, dict):
+            raise ValueError("Invalid SerpApi response")
+        error = data.get("error")
+        no_results = (metadata.get("status") == "Success" and
+                      error == "Google hasn't returned any results for this query.")
+        if error and not no_results:
+            # Provider messages can contain secrets: never echo raw error text.
+            raise ValueError("SerpApi returned an error; check account, quota and query")
+        if metadata.get("status") in ("Error", "Processing", "Queued"):
+            raise ValueError("SerpApi search did not complete successfully")
+        results = data.get("organic_results") or []
+        if not isinstance(results, list):
+            raise ValueError("Invalid SerpApi response")
+        return [item["link"] for item in results if isinstance(item, dict)
+                and isinstance(item.get("link"), str)]
+
+    @staticmethod
+    def is_blocked(html: str) -> bool:
+        return False
+
+
+class SerpApiDuckDuckGoEngine(SerpApiGoogleEngine):
+    """DuckDuckGo organic results via the optional third-party SerpApi service."""
+    name = "serpapi_duckduckgo"
+    per_page = 50
+
+    def build_url(self, dork: str, page: int) -> str:
+        # DuckDuckGo's initial response contains at most 11 organic results;
+        # subsequent pages can contain up to 50.
+        start = 0 if page == 0 else 11 + (page - 1) * self.per_page
+        return self.build_offset_url(dork, start)
+
+    def build_offset_url(self, dork: str, start: int) -> str:
+        params = {"engine": "duckduckgo", "q": dork, "start": start, "output": "json"}
+        return "https://serpapi.com/search.json?" + urllib.parse.urlencode(params)
+
+    def next_offset(self, html: str):
+        data = json.loads(html)
+        pagination = data.get("serpapi_pagination") or {}
+        if not isinstance(pagination, dict):
+            raise ValueError("Invalid SerpApi pagination")
+        link = pagination.get("next")
+        if not link:
+            return None
+        if not isinstance(link, str):
+            raise ValueError("Invalid SerpApi pagination")
+        starts = urllib.parse.parse_qs(urllib.parse.urlsplit(link).query).get("start", [])
+        if len(starts) != 1 or not starts[0].isdigit() or len(starts[0]) > 8:
+            raise ValueError("Invalid SerpApi pagination offset")
+        return int(starts[0])
+
 def _decode_bing(href: str) -> str:
     """Bing sometimes wraps results in bing.com/ck/a?...&u=a1<base64>."""
     if "bing.com/ck/a" not in href:
@@ -154,7 +315,7 @@ def _is_engine_internal(url: str, needles) -> bool:
 
 
 ENGINES: Dict[str, Type[Engine]] = {
-    cls.name: cls for cls in (GoogleEngine, BingEngine, DuckDuckGoEngine, YahooEngine)
+    cls.name: cls for cls in (GoogleEngine, BingEngine, BingRSSEngine, DuckDuckGoEngine, YahooEngine, BraveEngine, SearXNGEngine, SerpApiGoogleEngine, SerpApiDuckDuckGoEngine)
 }
 
 
