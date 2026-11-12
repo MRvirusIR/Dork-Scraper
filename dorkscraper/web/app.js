@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="workspace-token"]').content;
-let currentJob = null, timer = null, resultRows = [], cleanRows = [];
+let currentJob = null, timer = null, resultRows = [], cleanRows = [], providerConfig = {};
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const engineName = s => ({serpapi_google:'Google via SerpApi', serpapi_duckduckgo:'DuckDuckGo via SerpApi', duckduckgo:'DuckDuckGo', bing_rss:'Bing RSS · no key', searxng:'SearXNG · no key'})[s] || cap(s);
 let toastTimer;
@@ -55,7 +55,45 @@ function renderJob(job) {
   resultRows=job.items || []; renderResults();
   if(running) { clearTimeout(timer); timer=setTimeout(async()=>{try {renderJob(await api('/api/jobs/'+job.id));} catch(e) {toast(e.message);}},1200); }
 }
-$('search-form').addEventListener('submit', async e=>{e.preventDefault(); const queries=lines($('queries').value); const engines=[...document.querySelectorAll('#engines input:checked')].map(e=>e.value); if(!engines.length && !$('keyless-fallback').checked) return toast('Choose at least one search engine.'); if(!queries.length) return toast('Enter a search query.'); const button=e.submitter; button.disabled=true; try {const job=await api('/api/jobs','POST',{queries,engines,keyless_fallback:$('keyless-fallback').checked,manual_browser:$('manual-browser').checked,pages:Number($('pages').value),delay:Number($('delay').value),options:opts('search')}); $('result-filter').value=''; if(job.queries.join('\n') !== queries.join('\n')) { $('queries').value=job.queries.join('\n'); $('query-warning').hidden=true; toast('Copied code spans were separated into individual queries.'); } renderJob(job); } catch(err){toast(err.message);} finally {button.disabled=false;} });
+function missingSetup(engine) {
+  if (engine==='brave' && !providerConfig.brave_configured) return 'Brave API key';
+  if (engine.startsWith('serpapi_') && !providerConfig.serpapi_google_configured) return 'SerpApi API key';
+  if (engine==='searxng' && !providerConfig.searxng_configured) return 'SearXNG instance URL';
+  return '';
+}
+function refreshProviderStatus(config) {
+  providerConfig=config;
+  for (const input of document.querySelectorAll('#engines input')) {
+    const missing=missingSetup(input.value);
+    input.parentElement.querySelector('span').textContent=engineName(input.value)+(missing ? ' · setup required' : '');
+  }
+  $('serpapi-state').textContent=config.serpapi_google_configured ? '· key set' : '· not set';
+  $('brave-state').textContent=config.brave_configured ? '· key set' : '· not set';
+  $('searx-state').textContent=config.searxng_configured ? '· URL set' : '· not set';
+}
+function showSetup(message) { $('provider-settings').open=true; $('provider-message').textContent=message; toast(message); }
+$('save-providers').addEventListener('click',async()=>{
+  const values={SERPAPI_API_KEY:$('serpapi-key').value, BRAVE_API_KEY:$('brave-key').value, SEARXNG_URL:$('searx-url').value};
+  const updates=Object.fromEntries(Object.entries(values).filter(([,v])=>v.trim()));
+  if(!Object.keys(updates).length) { $('provider-message').textContent='Enter a value to save, or use Clear to remove one.'; return; }
+  try { refreshProviderStatus(await api('/api/config','POST',updates)); $('provider-message').textContent='Settings saved for this session. Provider access and quota have not been verified.'; }
+  catch(e) { $('provider-message').textContent=e.message; }
+  finally { $('serpapi-key').value=''; $('brave-key').value=''; $('searx-url').value=''; }
+});
+document.querySelectorAll('[data-clear-setting]').forEach(button=>button.addEventListener('click',async()=>{
+  try { refreshProviderStatus(await api('/api/config','POST',{[button.dataset.clearSetting]:''})); $('provider-message').textContent='Cleared for this session. Values set in the environment return after restart.'; }
+  catch(e) { $('provider-message').textContent=e.message; }
+}));
+$('search-form').addEventListener('submit', async e=>{
+  e.preventDefault(); const queries=lines($('queries').value); const engines=[...document.querySelectorAll('#engines input:checked')].map(e=>e.value);
+  const keyless=$('keyless-fallback').checked;
+  if(!engines.length && !keyless) return toast('Choose at least one search engine.');
+  if(!queries.length) return toast('Enter a search query.');
+  if(!keyless) { const missing=[...new Set(engines.map(missingSetup).filter(Boolean))]; if(missing.length) return showSetup('Set '+missing.join(' and ')+' before searching, or deselect the provider.'); }
+  const button=e.submitter; button.disabled=true;
+  try {const job=await api('/api/jobs','POST',{queries,engines,keyless_fallback:keyless,manual_browser:$('manual-browser').checked,pages:Number($('pages').value),delay:Number($('delay').value),options:opts('search')}); $('result-filter').value=''; if(job.queries.join('\n') !== queries.join('\n')) { $('queries').value=job.queries.join('\n'); $('query-warning').hidden=true; toast('Copied code spans were separated into individual queries.'); } renderJob(job); }
+  catch(err){toast(err.message);} finally {button.disabled=false;}
+});
 $('cancel').addEventListener('click',async()=>{if(!currentJob)return; try{const r=await api(`/api/jobs/${currentJob.id}/cancel`,'POST');toast(r.message);}catch(e){toast(e.message);}});
 $('clean-form').addEventListener('submit',async e=>{e.preventDefault(); try {const data=await api('/api/clean','POST',{urls:lines($('urls').value),options:opts('clean')}); cleanRows=data.items; $('clean-count').textContent=data.output_count; $('clean-summary').textContent=`${data.input_count} input · ${data.output_count} kept · ${data.removed_count} removed`; setChildren($('clean-results'),cleanRows.length ? cleanRows.map(r=>urlRow(r.url,r.original!==r.url ? `Original: ${r.original}` : 'Unchanged')) : [empty('No URLs kept','Check your input and filters.')]); $('clean-export').disabled=!cleanRows.length; $('clean-json').disabled=!cleanRows.length; } catch(err){toast(err.message);} });
 $('clean-export').onclick=()=>download('clean-urls.txt',cleanRows.map(x=>x.url).join('\n')+'\n','text/plain');
@@ -68,15 +106,12 @@ async function setup(){
     const config=await api('/api/config');
     const nodes=config.engines.map(engine=>{
       const label=document.createElement('label'); label.className='engine';
-      const input=document.createElement('input'); input.type='checkbox'; input.value=engine;
-      const needsHost=engine==='searxng'&&!config.searxng_configured;
-      const needsKey=(engine==='brave'&&!config.brave_configured) || (engine.startsWith('serpapi_')&&!config.serpapi_google_configured);
-      input.disabled=needsKey || needsHost;
-      input.checked=engine==='bing_rss';
-      const text=document.createElement('span'); text.textContent=engineName(engine)+(needsKey ? ' · API key required' : needsHost ? ' · configure instance' : '');
-      label.append(input,text); return label;
+      const input=document.createElement('input'); input.type='checkbox'; input.value=engine; input.checked=engine==='bing_rss';
+      const text=document.createElement('span'); label.append(input,text);
+      input.addEventListener('change',()=>{if(input.checked && ['brave','searxng','serpapi_google','serpapi_duckduckgo'].includes(engine) && $('keyless-fallback').checked) { $('keyless-fallback').checked=false; toast('Keyless fallback turned off; the selected engines will be used.'); } const missing=missingSetup(engine); if(input.checked && missing) showSetup('Set '+missing+' in provider settings before searching.');});
+      return label;
     });
-    setChildren($('engines'),nodes);
+    setChildren($('engines'),nodes); refreshProviderStatus(config);
     const jobs=await api('/api/jobs'); const active=jobs.find(j=>['running','queued'].includes(j.status)); if(active)renderJob(active);
   }catch(e){toast(e.message);}
 }
