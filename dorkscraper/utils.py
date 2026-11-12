@@ -94,8 +94,12 @@ def is_static_asset(url: str) -> bool:
 
 
 def matches_domain_filter(url: str, patterns: Sequence[str]) -> bool:
-    domain = get_domain(url)
-    return any(fnmatch.fnmatch(domain, p.lower()) for p in patterns)
+    try:
+        # Filter against the actual hostname: do not strip www or include a port.
+        domain = (urllib.parse.urlsplit(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return any(fnmatch.fnmatchcase(domain, p.lower().rstrip(".")) for p in patterns)
 
 
 def clean_urls(

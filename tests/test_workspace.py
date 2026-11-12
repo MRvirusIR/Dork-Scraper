@@ -124,3 +124,14 @@ def test_cross_engine_unique_modes():
     assert len(grouped)==1 and grouped[0]['sources']==['google / q1','bing / q2']
     assert len(webapp.present_job({**base, 'unique_mode':'none'})['items'])==2
     assert len(webapp.present_job({**base, 'unique_mode':'domain'})['items'])==1
+
+
+def test_old_history_scope_filter_and_attribution(client):
+    job = {'id':'old','created':1,'status':'completed','queries':['site:*.bugcod3.com'],
+           'engines':['bing'], 'results':[{'engine':'bing','query':'site:*.bugcod3.com',
+           'urls':['https://a.bugcod3.com/', 'https://example.com/']}], 'total':1,'completed':1}
+    webapp.save(job)
+    data=client.get('/api/jobs/old').json()
+    assert data['results'][0]['urls']==['https://a.bugcod3.com/']
+    assert data['results'][0]['out_of_scope_count']==1
+    assert [i['url'] for i in data['items']]==['https://a.bugcod3.com/']

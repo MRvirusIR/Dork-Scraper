@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from .core import DorkScraper
 from .engines import ENGINES
 from .utils import clean_urls, normalize_url, get_domain, param_names
+from .scope import apply_site_scope, apply_literal_query_filter, normalize_query_input
 
 STATIC = Path(__file__).parent / "web"
 TOKEN = secrets.token_urlsafe(32)
@@ -136,7 +137,16 @@ def present_job(job):
     """Combine cross-engine results using the selected uniqueness policy."""
     mode = job.get('unique_mode', 'exact')
     seen, items = {}, []
-    for result in job.get('results', []):
+    safe_results = []
+    for original in job.get('results', []):
+        result = dict(original)
+        result['urls'], removed, warning = apply_site_scope(result['query'], result['urls'])
+        result['out_of_scope_count'] = result.get('out_of_scope_count', 0) + removed
+        result['scope_warning'] = warning
+        result['urls'], literal_removed, literal = apply_literal_query_filter(result['query'], result['urls'])
+        result['literal_filter'] = literal
+        result['literal_filtered_count'] = result.get('literal_filtered_count', 0) + literal_removed
+        safe_results.append(result)
         source = '%s / %s' % (result['engine'], result['query'])
         for url in result['urls']:
             parsed = urlparse(url)
@@ -153,7 +163,7 @@ def present_job(job):
                 items.append({'url': url, 'sources': []})
             if source not in items[seen[key]]['sources']:
                 items[seen[key]]['sources'].append(source)
-    return {**job, 'items': items}
+    return {**job, 'results': safe_results, 'items': items}
 
 
 def run_job(job, opts, cancel):
@@ -170,7 +180,9 @@ def run_job(job, opts, cancel):
                     result = scraper.scrape(query)
                 results.append({'query': query, 'engine': engine, 'urls': result.urls,
                                 'pages_fetched': result.pages_fetched, 'blocked': result.blocked,
-                                'error': result.error})
+                                'error': result.error, 'out_of_scope_count': result.out_of_scope_count,
+                                'scope_warning': result.scope_warning, 'effective_query': result.effective_query or query,
+                                'literal_filter': result.literal_filter, 'literal_filtered_count': result.literal_filtered_count})
                 job['results'] = results
                 job['completed'] = len(results)
                 save(job)
@@ -225,7 +237,7 @@ def get_job(job_id: str):
 
 @app.post('/api/jobs', status_code=202)
 def create_job(body: SearchRequest):
-    queries = list(dict.fromkeys(q.strip() for q in body.queries if q.strip()))
+    queries = normalize_query_input(body.queries)
     engines = list(dict.fromkeys(body.engines))
     if not queries or len(queries) > 20 or any(len(q) > 600 for q in queries):
         raise HTTPException(422, 'Provide 1–20 queries, each up to 600 characters')

@@ -33,6 +33,11 @@ def write_json(results: List[SearchResult], path: str) -> int:
             "count": r.count,
             "pages_fetched": r.pages_fetched,
             "blocked": r.blocked,
+            "effective_query": r.effective_query,
+            "out_of_scope_count": r.out_of_scope_count,
+            "scope_warning": r.scope_warning,
+            "literal_filter": r.literal_filter,
+            "literal_filtered_count": r.literal_filtered_count,
             "error": r.error,
             "urls": r.urls,
         }
