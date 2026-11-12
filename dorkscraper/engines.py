@@ -184,22 +184,34 @@ class BraveEngine(Engine):
         return False
 
 
+def validate_searxng_url(base: str) -> str:
+    """Validate an explicitly configured instance without sending a request."""
+    base = base.strip()
+    if any(ord(c) <= 32 or ord(c) == 127 for c in base):
+        raise ValueError("Invalid SearXNG URL")
+    try:
+        parsed = urllib.parse.urlsplit(base)
+        host = parsed.hostname
+        _ = parsed.port
+    except ValueError:
+        raise ValueError("Invalid SearXNG URL") from None
+    if (not host or parsed.scheme not in ("http", "https") or parsed.username or parsed.password
+            or parsed.query or parsed.fragment
+            or (parsed.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"))):
+        raise ValueError("SearXNG URL must be HTTPS or local HTTP, without credentials or query")
+    return base.rstrip('/')
+
+
 class SearXNGEngine(Engine):
     """A user-configured SearXNG instance with JSON enabled; no key."""
     name = "searxng"
 
+    def __init__(self):
+        self.instance_url = None
+
     def build_url(self, dork: str, page: int) -> str:
-        base = os.environ.get("SEARXNG_URL", "").strip()
-        try:
-            parsed = urllib.parse.urlsplit(base)
-            host = parsed.hostname
-            port = parsed.port  # validate invalid port syntax
-        except ValueError:
-            raise ValueError("Invalid SEARXNG_URL") from None
-        if (not host or parsed.scheme not in ("http", "https") or parsed.username or parsed.password
-                or parsed.query or parsed.fragment
-                or (parsed.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"))):
-            raise ValueError("SEARXNG_URL must be HTTPS or local HTTP, without credentials or query")
+        base = self.instance_url if self.instance_url is not None else os.environ.get("SEARXNG_URL", "")
+        parsed = urllib.parse.urlsplit(validate_searxng_url(base))
         path = parsed.path.rstrip('/') + '/search'
         return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, urllib.parse.urlencode(
             {"q": dork, "format": "json", "pageno": page + 1}), ''))

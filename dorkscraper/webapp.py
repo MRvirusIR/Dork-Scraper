@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .core import DorkScraper
-from .engines import ENGINES
+from .engines import ENGINES, validate_searxng_url
 from .utils import clean_urls, normalize_url, get_domain, param_names
 from .scope import apply_site_scope, apply_literal_query_filter, normalize_query_input
 
@@ -28,6 +28,9 @@ TOKEN = secrets.token_urlsafe(32)
 DB_PATH = Path(os.environ.get("DORK_SCRAPER_DB", Path.home() / ".dork-scraper" / "workspace.sqlite3"))
 DB_LOCK = threading.RLock()
 CANCEL = {}
+# Runtime-only overrides; never write secrets or instance URLs to job history.
+PROVIDER_SETTINGS = {}
+SETTING_NAMES = ('BRAVE_API_KEY', 'SERPAPI_API_KEY', 'SEARXNG_URL')
 KEYLESS_FALLBACK = ('bing_rss', 'bing', 'duckduckgo', 'google', 'yahoo')
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -170,7 +173,7 @@ def present_job(job):
     return {**job, 'results': safe_results, 'items': items}
 
 
-def run_job(job, opts, cancel):
+def run_job(job, opts, cancel, provider_settings=None):
     job['status'] = 'running'; save(job)
     scrapers = {}
     def challenge_notice(message):
@@ -199,7 +202,8 @@ def run_job(job, opts, cancel):
                                                       jitter=1, timeout=15, retries=1, clean_opts=opts,
                                                       use_selenium=interactive, headless=not interactive,
                                                       manual_captcha=interactive, cancel_event=cancel,
-                                                      challenge_notice=challenge_notice)
+                                                      challenge_notice=challenge_notice,
+                                                      provider_settings=provider_settings)
                     if interactive:
                         challenge_notice('Interactive browser running for %s; use the opened window if a challenge appears.' % engine)
                     result = scrapers[engine].scrape(query)
@@ -252,11 +256,53 @@ def css():
     return Response((STATIC / 'style.css').read_text(encoding='utf-8'), media_type='text/css')
 
 
+def effective_settings():
+    return {name: PROVIDER_SETTINGS.get(name, os.environ.get(name, '')) for name in SETTING_NAMES}
+
+
+def config_status():
+    settings = effective_settings()
+    return {'engines': sorted(ENGINES), 'brave_configured': bool(settings['BRAVE_API_KEY']),
+            'serpapi_google_configured': bool(settings['SERPAPI_API_KEY']),
+            'searxng_configured': bool(settings['SEARXNG_URL'])}
+
+
 @app.get('/api/config')
 def config():
-    return {'engines': sorted(ENGINES), 'brave_configured': bool(os.environ.get('BRAVE_API_KEY')),
-            'serpapi_google_configured': bool(os.environ.get('SERPAPI_API_KEY')),
-            'searxng_configured': bool(os.environ.get('SEARXNG_URL'))}
+    with DB_LOCK:
+        return config_status()
+
+
+@app.post('/api/config')
+async def configure(request: Request):
+    # Read manually so validation errors never echo secrets in a response.
+    raw = await request.body()
+    if len(raw) > 8192:
+        raise HTTPException(413, 'Settings request is too large.')
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(400, 'Invalid settings request.') from None
+    if not isinstance(data, dict) or not data or any(name not in SETTING_NAMES for name in data):
+        raise HTTPException(422, 'Invalid settings fields.')
+    updates = {}
+    for name, value in data.items():
+        if not isinstance(value, str) or len(value) > 2048:
+            raise HTTPException(422, 'Invalid settings value.')
+        value = value.strip()
+        if name != 'SEARXNG_URL' and value and (len(value) > 512 or any(ord(c) < 33 or ord(c) > 126 for c in value)):
+            raise HTTPException(422, 'Invalid API key format.')
+        if name == 'SEARXNG_URL' and value:
+            try:
+                value = validate_searxng_url(value)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from None
+        updates[name] = value
+    with DB_LOCK:
+        if CANCEL:
+            raise HTTPException(409, 'Stop the current search before changing settings.')
+        PROVIDER_SETTINGS.update(updates)
+        return config_status()
 
 
 @app.post('/api/clean')
@@ -288,16 +334,17 @@ def create_job(body: SearchRequest):
         raise HTTPException(422, 'Interactive browser requires direct Google or DuckDuckGo.')
     if body.manual_browser and importlib.util.find_spec('selenium') is None:
         raise HTTPException(422, 'Interactive browser requires Selenium; install dork-scraper[selenium].')
-    if 'searxng' in engines and not os.environ.get('SEARXNG_URL'):
-        raise HTTPException(422, 'SearXNG requires SEARXNG_URL for an instance with JSON enabled.')
-    if 'brave' in engines and not os.environ.get('BRAVE_API_KEY'):
-        raise HTTPException(422, 'Brave requires BRAVE_API_KEY; configure it or deselect Brave.')
-    if any(e in engines for e in ('serpapi_google', 'serpapi_duckduckgo')) and not os.environ.get('SERPAPI_API_KEY'):
-        raise HTTPException(422, 'SerpApi requires SERPAPI_API_KEY; configure it or deselect its engines.')
     opts = options_dict(body.options)
     with DB_LOCK:
         if len(CANCEL) >= 1:
             raise HTTPException(409, 'A search is already running')
+        settings = effective_settings()
+        if 'searxng' in engines and not settings['SEARXNG_URL']:
+            raise HTTPException(422, 'SearXNG requires SEARXNG_URL or an instance URL in provider settings.')
+        if 'brave' in engines and not settings['BRAVE_API_KEY']:
+            raise HTTPException(422, 'Brave requires BRAVE_API_KEY; configure it in provider settings.')
+        if any(e in engines for e in ('serpapi_google', 'serpapi_duckduckgo')) and not settings['SERPAPI_API_KEY']:
+            raise HTTPException(422, 'SerpApi requires SERPAPI_API_KEY; configure it in provider settings.')
         job = {'id': uuid.uuid4().hex, 'created': time.time(), 'status': 'queued',
                'queries': queries, 'engines': engines, 'pages': body.pages, 'delay': body.delay,
                'completed': 0, 'total': len(queries)*len(engines), 'results': [], 'error': None,
@@ -305,7 +352,7 @@ def create_job(body: SearchRequest):
                'unique_mode': opts['unique_mode']}
         cancel = threading.Event(); CANCEL[job['id']] = cancel
         save(job)
-        threading.Thread(target=run_job, args=(job, opts, cancel), daemon=True).start()
+        threading.Thread(target=run_job, args=(job, opts, cancel, settings), daemon=True).start()
     return present_job(job)
 
 

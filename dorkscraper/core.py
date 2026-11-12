@@ -80,12 +80,18 @@ class DorkScraper:
     challenge_timeout: int = 120
     cancel_event: object = None
     challenge_notice: Optional[Callable[[str], None]] = None
+    provider_settings: Optional[dict] = field(default=None, repr=False)
 
     _driver: object = field(default=None, init=False, repr=False)
 
     def _emit(self, level: str, message: str) -> None:
         if self.log:
             self.log(level, message)
+
+    def _setting(self, name: str) -> str:
+        if self.provider_settings is not None:
+            return self.provider_settings.get(name, '')
+        return os.environ.get(name, '')
 
     # ---------------------------------------------------------------- fetch
     def _fetch_http(self, url: str) -> str:
@@ -97,14 +103,14 @@ class DorkScraper:
             "Connection": "keep-alive",
         }
         if self.engine.lower() == "brave":
-            key = os.environ.get("BRAVE_API_KEY")
+            key = self._setting("BRAVE_API_KEY")
             if not key:
                 raise ValueError("Brave requires the BRAVE_API_KEY environment variable")
             headers["X-Subscription-Token"] = key
             headers["Accept"] = "application/json"
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
         if self.engine.lower() in ("serpapi_google", "serpapi_duckduckgo"):
-            key = os.environ.get("SERPAPI_API_KEY")
+            key = self._setting("SERPAPI_API_KEY")
             if not key:
                 raise ValueError("SerpApi requires the SERPAPI_API_KEY environment variable")
             # SerpApi documents API key as a query parameter. Never propagate
@@ -190,9 +196,9 @@ class DorkScraper:
 
     def _fetch(self, url: str) -> str:
         last_exc: Optional[Exception] = None
-        if self.engine.lower() == "brave" and not os.environ.get("BRAVE_API_KEY"):
+        if self.engine.lower() == "brave" and not self._setting("BRAVE_API_KEY"):
             raise ValueError("Brave requires the BRAVE_API_KEY environment variable")
-        if self.engine.lower() in ("serpapi_google", "serpapi_duckduckgo") and not os.environ.get("SERPAPI_API_KEY"):
+        if self.engine.lower() in ("serpapi_google", "serpapi_duckduckgo") and not self._setting("SERPAPI_API_KEY"):
             raise ValueError("SerpApi requires the SERPAPI_API_KEY environment variable")
         if self.engine.lower() in ("brave", "searxng", "serpapi_google", "serpapi_duckduckgo", "bing_rss") and self.use_selenium:
             raise ValueError("This provider cannot be used with Selenium")
@@ -224,6 +230,8 @@ class DorkScraper:
     # ---------------------------------------------------------------- scrape
     def scrape(self, dork: str) -> SearchResult:
         engine: Engine = get_engine(self.engine)
+        if engine.name == 'searxng' and self.provider_settings is not None:
+            engine.instance_url = self._setting('SEARXNG_URL')
         result = SearchResult(dork=dork, engine=engine.name, effective_query=engine_query(dork))
         collected: List[str] = []
         offset = 0
