@@ -69,6 +69,12 @@ dork-scraper -e brave -d 'site:example.com'
 
 Brave's API supports up to 10 pages and 20 results per page. Search engines may change HTML or return blocks/CAPTCHAs; the workspace reports per-engine errors, but cannot guarantee availability or completeness. No CAPTCHA bypass is provided.
 
+### Troubleshooting provider results
+
+- Start with `site:example.com` to include the apex and subdomains; `site:*.example.com` keeps **only subdomains**. Then add filters one at a time. A single `inurl:"?name="` is enforced as a literal URL substring, not as `&name=`. Indexed results can be incomplete or absent.
+- CAPTCHA, HTTP 403/429, JavaScript-only Google pages and Yahoo HTTP 500 are provider-side responses, not evidence the target has no pages. The panel stops requesting a blocked provider or JavaScript-only Google for the rest of that job and shows skipped searches explicitly; try later or choose another provider. It does not bypass challenges.
+- SerpApi may report a successful empty Google search in an `error` field; this is treated as zero results. Actual HTTP failures display a sanitized category without exposing the API key. Check your account, quota and provider status when needed.
+
 ### Google via SerpApi (optional third party)
 
 The HTML Google provider may return a JavaScript-only page. As an alternative, select **Google via SerpApi** in the panel, or use `-e serpapi_google` in the CLI. This is a third-party service, **not an official Google API**. It needs a [SerpApi account and API key](https://serpapi.com/manage-api-key) and may use a paid plan; check [current quotas and prices](https://serpapi.com/pricing). Queries and result data are sent to SerpApi and may be retained by the service; review its terms and privacy policy. Do not paste your API key into the UI, a dork or an output file.
@@ -121,7 +127,7 @@ dork-scraper -d 'inurl:index.php?id=' -e google -p 3 -f json -o results.json
 # run a whole list of dorks, keep only URLs with parameters, dedupe by pattern
 dork-scraper -D dorks/sqli.txt --params-only --unique pattern -o targets.txt
 
-# DuckDuckGo (no CAPTCHAs), limit to one target domain
+# DuckDuckGo, limit to one target domain (provider may still return a CAPTCHA)
 dork-scraper -d 'site:example.com login' -e duckduckgo --include-domain '*.example.com'
 
 # route everything through Burp / a proxy

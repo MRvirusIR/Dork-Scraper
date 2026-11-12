@@ -6,7 +6,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [3.0.0] - Unreleased
 
 ### Added
-- Optional Google search through the third-party SerpApi service with `SERPAPI_API_KEY`; no automatic retries.
+- Optional Google search through the third-party SerpApi service with `SERPAPI_API_KEY`; no automatic retries. Correctly classify its successful empty results and show safe, actionable HTTP errors.
+- Stop batch requests to blocked/rate-limited providers or JavaScript-only Google; clearly report skipped searches, and avoid false CAPTCHA detection from ordinary result text.
 - Clearly distinguish a finished job from successful providers, and explain empty results.
 - Enforce an unambiguous positive `site:` scope against actual result hostnames; show rejected counts and warnings when automatic scope cannot be applied.
 - Enforce a single simple `inurl:"?key="` as an exact URL substring and report removed counts.
