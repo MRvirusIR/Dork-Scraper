@@ -8,7 +8,7 @@
 
 <p align="center">
   <b>A local recon workspace and multi-engine URL scraper for authorized security research.</b><br>
-  Search Google, Bing, DuckDuckGo, Yahoo, Brave &amp; Google via SerpApi — then clean, filter and export results.
+  Search without an API key using Bing RSS, direct engines or your own SearXNG — then clean, filter and export results. Optional paid providers are also supported.
 </p>
 
 <p align="center">
@@ -25,6 +25,7 @@
 
 - **Local web workspace** — responsive search, URL cleaner, dark/light theme, and local history.
 - **Multi-engine searches** — run multiple queries across selected engines, combine results, track their source, and export TXT, JSON or CSV.
+- **Keyless options** — Bing RSS by default, direct engines, optional manual CAPTCHA in a visible browser, and an optional configured SearXNG instance.
 - **API providers** — Brave Search API and Google and DuckDuckGo results via the third-party SerpApi service, using your own API keys.
 - **URL Cleaner** — paste or import a list, preview cleaned URLs alongside their first original, and export; no target URLs are contacted.
 - **Local jobs** — per-engine status and errors, progress, cancellation and SQLite history.
@@ -52,9 +53,24 @@ Choose **Search** for single or batch searches, **URL Cleaner** for local list p
 
 Enter **one dork per line**. If you paste a list of inline-code dorks separated by `and` or commas, the workspace separates them; a plain Boolean expression is not silently split. For one unambiguous positive `site:example.com` operator, the scope guard only keeps that domain and its subdomains. `site:*.example.com` keeps subdomains **only**, not the apex. The wildcard may be sent to the provider as `site:example.com` for compatibility; the actual submitted query and the number of excluded URLs are shown in the result status. Domain filters compare actual hostnames (ports ignored); `*.example.com` does not include the apex.
 
-Search engines may ignore dork operators or relax query matching. The scope guard checks **hostnames only** and does not prove authorization. As an additional narrow check, a single simple `inurl:"?key="` is enforced as the exact, case-sensitive URL substring `?key=`; other `inurl:` forms and search operators are not verified locally. For OR, NOT, multiple site operators or unsupported site syntax, the automatic site guard is inactive and a warning is shown; use explicit Include domains or separate queries. Old saved search results are filtered on display under the same rules. Search engine CAPTCHA and JavaScript challenges are upstream limitations: this tool reports them and does not solve or bypass them. Google Selenium is available in the CLI with `pip install ".[selenium]"` and `--selenium`, but it is not guaranteed to prevent challenges and is not currently a web-panel option.
+Search engines may ignore dork operators or relax query matching. The scope guard checks **hostnames only** and does not prove authorization. As an additional narrow check, a single simple `inurl:"?key="` is enforced as the exact, case-sensitive URL substring `?key=`; other `inurl:` forms and search operators are not verified locally. For OR, NOT, multiple site operators or unsupported site syntax, the automatic site guard is inactive and a warning is shown; use explicit Include domains or separate queries. Old saved search results are filtered on display under the same rules. CAPTCHA and JavaScript challenges are upstream limitations. The workspace can open a visible browser for **manual** challenge completion; it does not solve challenges automatically. Providers may still deny requests or return incomplete results.
 
 The workspace binds **only to 127.0.0.1**, has no user accounts, and is intended for one trusted local user, not a public or multi-user deployment. Keep your computer account private: search queries and results are stored unencrypted in `~/.dork-scraper/workspace.sqlite3`. You can set `DORK_SCRAPER_DB` before launch to choose another location. The UI's theme preference is stored in the browser. The server applies host/origin checks and a per-process token to mutation requests; these are not a substitute for authentication on a shared machine.
+
+### Keyless search and manual challenges
+
+The panel defaults to **Bing RSS · no key**. Optionally enable **Automatic keyless fallback**: for each query it tries Bing RSS, Bing, DuckDuckGo, Google and Yahoo in that order until a matching URL remains after filtering. It overrides the engine checkboxes, does not use API-key providers and shows attempted, failed and unneeded searches separately. Queries are sent to each attempted provider. It does not require an account or API key, but Bing can ignore dork operators and return unrelated or incomplete results. Out-of-scope URLs are removed and reported. Repeated result pages are stopped. A valid empty RSS response is different from a provider error.
+
+For a visible browser session (direct Google or DuckDuckGo only), install the optional dependencies and restart the workspace:
+
+```bash
+python -m pip install ".[web,selenium]"
+dork-scraper-web
+```
+
+Select direct **Google** and/or **DuckDuckGo**, then check **Interactive browser**. Chrome/Chromium and a compatible driver plus a graphical desktop are required on the same machine running the workspace. The tool opens a separate browser window; if a CAPTCHA appears, complete it yourself there. The job waits up to two minutes and continues in the same browser session, preserving that session across queries during the job. Stop search cancels the wait. It does not bypass CAPTCHA, guarantee success, transfer cookies from a different browser, or work on a headless server without a display. The browser is closed at the end of the job.
+
+Optionally, run your own [SearXNG](https://docs.searxng.org/) with JSON output enabled and set `SEARXNG_URL` before launching the workspace (for example `http://127.0.0.1:8080`). The instance is not bundled and is never selected or contacted without configuration. Remote instances must use HTTPS and receive your queries; trust their operator. Some instances disable JSON or have blocked upstream engines. No SearXNG API key is required; see [SearXNG Search API](https://docs.searxng.org/dev/search_api.html). For CLI use `dork-scraper -e bing_rss -d 'site:example.com'` or `-e searxng` after configuring the instance.
 
 ### Brave Search
 
@@ -72,7 +88,7 @@ Brave's API supports up to 10 pages and 20 results per page. Search engines may 
 ### Troubleshooting provider results
 
 - Start with `site:example.com` to include the apex and subdomains; `site:*.example.com` keeps **only subdomains**. Then add filters one at a time. A single `inurl:"?name="` is enforced as a literal URL substring, not as `&name=`. Indexed results can be incomplete or absent.
-- When a SerpApi key is configured, Google via SerpApi is selected by default. Unconfigured API providers are disabled; configure their key and restart the panel to enable them. A key being present does not guarantee validity or quota.
+- Bing RSS is selected by default even when API keys exist. Unconfigured API providers are disabled; configure their key and restart the panel to enable them. A key being present does not guarantee validity or quota.
 - CAPTCHA, HTTP 403/429, JavaScript-only Google pages and Yahoo HTTP 500 are provider-side responses, not evidence the target has no pages. The panel stops requesting a blocked provider or JavaScript-only Google for the rest of that job and shows skipped searches explicitly; try later or choose another provider. It does not bypass challenges.
 - SerpApi may report a successful empty Google search in an `error` field; this is treated as zero results. Actual HTTP failures display a sanitized category without exposing the API key. Check your account, quota and provider status when needed.
 

@@ -6,9 +6,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [3.0.0] - Unreleased
 
 ### Added
+- Keyless Bing RSS default, opt-in keyless fallback chain and optional user-configured SearXNG JSON instance; report provider filtering and partial upstream errors.
+- Optional visible Selenium session in the web panel: users can solve challenges themselves in the same browser session, with progress, timeout and cancellation.
 - Optional Google search through the third-party SerpApi service with `SERPAPI_API_KEY`; no automatic retries. Correctly classify its successful empty results and show safe, actionable HTTP errors.
 - Stop batch requests to blocked/rate-limited providers or JavaScript-only Google; clearly report skipped searches, and avoid false CAPTCHA detection from ordinary result text.
-- Add DuckDuckGo via SerpApi, with validated provider pagination, explicit quota notice and no automatic billable retries. Default to configured API providers; reject missing credentials before starting web jobs.
+- Add DuckDuckGo via SerpApi, with validated provider pagination, explicit quota notice and no automatic billable retries. Reject missing credentials before starting web jobs.
 - Clearly distinguish a finished job from successful providers, and explain empty results.
 - Enforce an unambiguous positive `site:` scope against actual result hostnames; show rejected counts and warnings when automatic scope cannot be applied.
 - Enforce a single simple `inurl:"?key="` as an exact URL substring and report removed counts.
@@ -22,6 +24,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Automated tests for the workspace API, safety checks, job lifecycle and Brave provider.
 
 ### Changed
+- Detect repeated result pages and distinguish unrecognized empty HTML from a confirmed empty RSS/API response.
 - URL validation rejects non-HTTP(S) schemes, malformed hosts/ports and embedded credentials.
 - Tracking cleanup handles arbitrary `utm_` parameters as well as known tracking keys.
 
