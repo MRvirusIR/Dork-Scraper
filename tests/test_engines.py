@@ -2,7 +2,7 @@ from dorkscraper.engines import ENGINES, get_engine
 
 
 def test_all_engines_registered():
-    assert set(ENGINES) == {"google", "bing", "duckduckgo", "yahoo"}
+    assert set(ENGINES) == {"google", "bing", "duckduckgo", "yahoo", "brave"}
 
 
 def test_google_parse():
@@ -26,3 +26,15 @@ def test_bing_parse():
 
 def test_block_detection():
     assert get_engine("google").is_blocked("Our systems have detected unusual traffic")
+
+
+def test_bing_decodes_wrapped_result():
+    html = '<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9hP2lkPTE">Result</a></h2></li>'
+    assert get_engine('bing').parse(html) == ['https://example.com/a?id=1']
+
+
+def test_google_js_only_page_is_reported(monkeypatch):
+    from dorkscraper.core import DorkScraper
+    monkeypatch.setattr(DorkScraper, '_fetch', lambda self, url: '<a href="/httpservice/retry/enablejs">Retry</a>')
+    result = DorkScraper(engine='google').scrape('site:example.com')
+    assert result.urls == [] and 'JavaScript-only' in result.error

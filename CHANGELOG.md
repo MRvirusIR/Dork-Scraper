@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.0.0] - Unreleased
+
+### Added
+- Optional local web workspace with responsive light/dark UI, search, cleaning, exports, and SQLite history.
+- Multi-query, multi-engine jobs with per-engine status, progress, cancellation between searches and source attribution.
+- Official Brave Search API provider using `BRAVE_API_KEY` (requires a subscription; max 10 pages).
+- Cross-engine deduplication with exact, domain, pattern, or none modes.
+- URL cleaning preview retains the first original for each output, with local text import.
+- Localhost-only server with Host/Origin checks and a per-process mutation token.
+- Automated tests for the workspace API, safety checks, job lifecycle and Brave provider.
+
+### Changed
+- URL validation rejects non-HTTP(S) schemes, malformed hosts/ports and embedded credentials.
+- Tracking cleanup handles arbitrary `utm_` parameters as well as known tracking keys.
+
+### Limitations
+- HTML-based providers depend on search-engine markup and may block requests or change results.
+- Brave live access requires a valid API key; cancellation waits for the current search to finish.
+- History is stored unencrypted locally and the UI is intended for a single trusted user.
+
 ## [2.0.0] - 2026-10-20
 
 A complete rewrite. The old single-file script is now a proper package.

@@ -21,10 +21,12 @@ dependencies = ["requests>=2.31", "beautifulsoup4>=4.12", "rich>=13.0", "fake-us
 
 [project.optional-dependencies]
 selenium = ["selenium>=4.15"]
-dev = ["pytest>=7"]
+web = ["fastapi>=0.100,<0.116", "uvicorn>=0.23,<1"]
+dev = ["pytest>=7", "httpx>=0.24,<1", "fastapi>=0.100,<0.116", "uvicorn>=0.23,<1"]
 
 [project.scripts]
 dork-scraper = "dorkscraper.cli:main"
+dork-scraper-web = "dorkscraper.webapp:main"
 
 [project.urls]
 Homepage = "https://github.com/MRvirusIR/Dork-Scraper"
@@ -32,6 +34,10 @@ Issues = "https://github.com/MRvirusIR/Dork-Scraper/issues"
 
 [tool.setuptools]
 packages = ["dorkscraper"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+dorkscraper = ["web/*.html", "web/*.css", "web/*.js"]
 
 [tool.setuptools.dynamic]
 version = { attr = "dorkscraper.__version__" }

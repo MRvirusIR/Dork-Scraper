@@ -7,35 +7,61 @@
 </h1>
 
 <p align="center">
-  <b>Fast, multi-engine Google-Dork URL scraper for recon &amp; bug bounty.</b><br>
-  Search Google, Bing, DuckDuckGo &amp; Yahoo — then clean, filter and export the results.
+  <b>A local recon workspace and multi-engine URL scraper for authorized security research.</b><br>
+  Search Google, Bing, DuckDuckGo, Yahoo &amp; Brave — then clean, filter and export results.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.8%2B-blue.svg" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="license">
-  <img src="https://img.shields.io/badge/version-2.0.0-orange.svg" alt="version">
-  <img src="https://img.shields.io/badge/engines-google%20%7C%20bing%20%7C%20ddg%20%7C%20yahoo-red.svg" alt="engines">
+  <img src="https://img.shields.io/badge/version-3.0.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/engines-google%20%7C%20bing%20%7C%20ddg%20%7C%20yahoo%20%7C%20brave-red.svg" alt="engines">
   <a href="https://t.me/BugCod3"><img src="https://img.shields.io/badge/telegram-BugCod3-2CA5E0.svg?logo=telegram" alt="telegram"></a>
 </p>
 
 ---
 
-## ✨ What's new in 2.0
+## ✨ What's new in 3.0
 
-Dork-Scraper was rewritten from the ground up. The old single-file Selenium script is now a clean, installable Python package:
+- **Local web workspace** — responsive search, URL cleaner, dark/light theme, and local history.
+- **Multi-engine searches** — run multiple queries across selected engines, combine results, track their source, and export TXT, JSON or CSV.
+- **Brave Search API** — optional official API provider, using your own API key.
+- **URL Cleaner** — paste or import a list, preview cleaned URLs alongside their first original, and export; no target URLs are contacted.
+- **Local jobs** — per-engine status and errors, progress, cancellation and SQLite history.
+- **Safer validation** — rejects invalid URL schemes, invalid ports and URLs containing credentials.
+- **CLI remains available** — existing workflows and text, CSV and JSON exports continue to work.
 
-- 🔎 **4 search engines** — `google`, `bing`, `duckduckgo`, `yahoo`
-- ⚡ **Lightweight by default** — plain HTTP requests (no browser needed); Selenium optional
-- 📂 **Batch mode** — run dozens of dorks from a file, with ready-made dork lists included
-- 🧹 **Built-in cleaning** — dedupe, strip tracking params, drop static assets, keep only parameterised URLs
-- 🌐 **Domain filters** — include/exclude by glob (`*.gov`, `*.example.com`, …)
-- 💾 **Export** — `txt`, `json` or `csv`
-- 🥷 **Stealth** — rotating User-Agents, randomised delays, retries w/ backoff, proxy support, CAPTCHA detection
-- 🎨 **Pretty terminal output** with `rich` (auto-falls back to plain text)
-- ✅ Unit tests + GitHub Actions CI
+> See [CHANGELOG.md](CHANGELOG.md) for details and limitations.
 
-> See the full list in [CHANGELOG.md](CHANGELOG.md).
+---
+
+## 🖥️ Local workspace
+
+```bash
+git clone https://github.com/MRvirusIR/Dork-Scraper.git
+cd Dork-Scraper
+python -m pip install ".[web]"
+dork-scraper-web
+# Open http://127.0.0.1:8765 in your browser
+# Optional: dork-scraper-web --port 8080
+```
+
+Choose **Search** for single or batch searches, **URL Cleaner** for local list processing, or **History** to reopen saved jobs. Search results are grouped across engines using the selected deduplication mode and retain the engine/query sources. Downloads contain the full result set, not just the current text filter. Include-domain supports comma-separated globs (for example `example.com, *.example.com`). Search jobs run sequentially with a configurable delay; stopping a job waits for the current query/engine search to finish. The history screen shows the latest 100 jobs and supports deletion.
+
+The workspace binds **only to 127.0.0.1**, has no user accounts, and is intended for one trusted local user, not a public or multi-user deployment. Keep your computer account private: search queries and results are stored unencrypted in `~/.dork-scraper/workspace.sqlite3`. You can set `DORK_SCRAPER_DB` before launch to choose another location. The UI's theme preference is stored in the browser. The server applies host/origin checks and a per-process token to mutation requests; these are not a substitute for authentication on a shared machine.
+
+### Brave Search
+
+Brave requires a [Brave Search API subscription and key](https://api-dashboard.search.brave.com/api-reference/web/search/get); provider fees or quotas may apply. Configure the key **in the server environment**, not in a URL or saved workspace:
+
+```bash
+export BRAVE_API_KEY="your-api-key"  # PowerShell: $env:BRAVE_API_KEY="your-api-key"
+dork-scraper-web
+# Also works with the CLI:
+dork-scraper -e brave -d 'site:example.com'
+```
+
+Brave's API supports up to 10 pages and 20 results per page. Search engines may change HTML or return blocks/CAPTCHAs; the workspace reports per-engine errors, but cannot guarantee availability or completeness. No CAPTCHA bypass is provided.
 
 ---
 
@@ -97,7 +123,7 @@ dork-scraper --clean-file old_urls.txt --drop-static --unique domain -o clean.tx
 |------|-------------|
 | `-d, --dork` | A dork query (repeatable) |
 | `-D, --dork-file` | File with one dork per line (`#` = comment) |
-| `-e, --engine` | `google` \| `bing` \| `duckduckgo` \| `yahoo` (default `google`) |
+| `-e, --engine` | `google` \| `bing` \| `duckduckgo` \| `yahoo` \| `brave` (default `google`) |
 | `-p, --pages` | Result pages per dork (default `1`) |
 | `-o, --output` | Output file (default `urls.txt`) |
 | `-f, --format` | `txt` \| `json` \| `csv` |
@@ -160,7 +186,7 @@ with DorkScraper(engine="duckduckgo", pages=2, clean_opts={"params_only": True})
 Issues and PRs are welcome. Run the tests with:
 
 ```bash
-pip install pytest
+pip install -e ".[dev]"
 pytest -q
 ```
 

@@ -7,6 +7,7 @@ and how to extract result URLs from the returned HTML.
 from __future__ import annotations
 
 import base64
+import json
 import urllib.parse
 from abc import ABC, abstractmethod
 from typing import Dict, List, Type
@@ -132,6 +133,27 @@ class YahooEngine(Engine):
         return urls
 
 
+
+class BraveEngine(Engine):
+    """Official Brave Search API (requires BRAVE_API_KEY in the environment)."""
+    name = "brave"
+    per_page = 20
+
+    def build_url(self, dork: str, page: int) -> str:
+        if page > 9:
+            raise ValueError("Brave supports at most 10 result pages")
+        return "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode(
+            {"q": dork, "count": self.per_page, "offset": page, "result_filter": "web"})
+
+    def parse(self, html: str) -> List[str]:
+        data = json.loads(html)
+        return [item["url"] for item in (data.get("web") or {}).get("results", [])
+                if isinstance(item, dict) and isinstance(item.get("url"), str)]
+
+    @staticmethod
+    def is_blocked(html: str) -> bool:
+        return False
+
 def _decode_bing(href: str) -> str:
     """Bing sometimes wraps results in bing.com/ck/a?...&u=a1<base64>."""
     if "bing.com/ck/a" not in href:
@@ -154,7 +176,7 @@ def _is_engine_internal(url: str, needles) -> bool:
 
 
 ENGINES: Dict[str, Type[Engine]] = {
-    cls.name: cls for cls in (GoogleEngine, BingEngine, DuckDuckGoEngine, YahooEngine)
+    cls.name: cls for cls in (GoogleEngine, BingEngine, DuckDuckGoEngine, YahooEngine, BraveEngine)
 }
 
 
