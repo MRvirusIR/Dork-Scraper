@@ -11,6 +11,7 @@ from .core import DorkScraper, SearchResult
 from .engines import ENGINES
 from .output import write_output
 from .utils import clean_urls
+from .scope import normalize_query_input
 
 BANNER = r"""
     ____             __      _____                                
@@ -79,7 +80,7 @@ def collect_dorks(args: argparse.Namespace) -> List[str]:
         if d not in seen:
             seen.add(d)
             unique.append(d)
-    return unique
+    return normalize_query_input(unique)
 
 
 # ----------------------------------------------------------------- summary

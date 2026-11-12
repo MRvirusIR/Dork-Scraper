@@ -6,6 +6,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [3.0.0] - Unreleased
 
 ### Added
+- Enforce an unambiguous positive `site:` scope against actual result hostnames; show rejected counts and warnings when automatic scope cannot be applied.
+- Enforce a single simple `inurl:"?key="` as an exact URL substring and report removed counts.
+- Normalize copied inline-code dork lists and report the effective query sent to each provider.
 - Optional local web workspace with responsive light/dark UI, search, cleaning, exports, and SQLite history.
 - Multi-query, multi-engine jobs with per-engine status, progress, cancellation between searches and source attribution.
 - Official Brave Search API provider using `BRAVE_API_KEY` (requires a subscription; max 10 pages).

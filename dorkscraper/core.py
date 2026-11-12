@@ -12,6 +12,7 @@ import requests
 
 from .engines import Engine, get_engine
 from .utils import clean_urls
+from .scope import apply_site_scope, apply_literal_query_filter, engine_query
 
 _FALLBACK_UA = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -47,6 +48,11 @@ class SearchResult:
     pages_fetched: int = 0
     blocked: bool = False
     error: Optional[str] = None
+    out_of_scope_count: int = 0
+    scope_warning: Optional[str] = None
+    effective_query: Optional[str] = None
+    literal_filter: Optional[str] = None
+    literal_filtered_count: int = 0
 
     @property
     def count(self) -> int:
@@ -143,12 +149,12 @@ class DorkScraper:
     # ---------------------------------------------------------------- scrape
     def scrape(self, dork: str) -> SearchResult:
         engine: Engine = get_engine(self.engine)
-        result = SearchResult(dork=dork, engine=engine.name)
+        result = SearchResult(dork=dork, engine=engine.name, effective_query=engine_query(dork))
         collected: List[str] = []
         for page in range(self.pages):
             self._emit("info", f"[{engine.name}] page {page + 1}/{self.pages}: {dork}")
             try:
-                page_url = engine.build_url(dork, page)
+                page_url = engine.build_url(result.effective_query, page)
                 html = self._fetch(page_url)
             except Exception as exc:  # noqa: BLE001
                 result.error = str(exc)
@@ -174,7 +180,20 @@ class DorkScraper:
                 break
             if page + 1 < self.pages:
                 self._sleep_between()
-        result.urls = clean_urls(collected, **self.clean_opts)
+        # Validate URLs and enforce site: before deduplication so an unrelated
+        # result can never replace an in-scope result in pattern/domain mode.
+        pre_opts = dict(self.clean_opts)
+        pre_opts['unique_mode'] = 'none'
+        valid = clean_urls(collected, **pre_opts)
+        scoped, result.out_of_scope_count, result.scope_warning = apply_site_scope(dork, valid)
+        if result.scope_warning:
+            self._emit('warn', result.scope_warning)
+        elif result.out_of_scope_count:
+            self._emit('info', f'Scope guard removed {result.out_of_scope_count} out-of-scope URLs')
+        scoped, result.literal_filtered_count, result.literal_filter = apply_literal_query_filter(dork, scoped)
+        post_opts = dict(self.clean_opts)
+        post_opts['strip_tracking'] = False
+        result.urls = clean_urls(scoped, **post_opts)
         return result
 
     def scrape_many(self, dorks: List[str]) -> List[SearchResult]:
