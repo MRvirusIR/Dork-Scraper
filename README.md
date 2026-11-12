@@ -70,11 +70,11 @@ dork-scraper-web
 
 Select direct **Google** and/or **DuckDuckGo**, then check **Interactive browser**. Chrome/Chromium and a compatible driver plus a graphical desktop are required on the same machine running the workspace. The tool opens a separate browser window; if a CAPTCHA appears, complete it yourself there. The job waits up to two minutes and continues in the same browser session, preserving that session across queries during the job. Stop search cancels the wait. It does not bypass CAPTCHA, guarantee success, transfer cookies from a different browser, or work on a headless server without a display. The browser is closed at the end of the job.
 
-Optionally, run your own [SearXNG](https://docs.searxng.org/) with JSON output enabled and set `SEARXNG_URL` before launching the workspace (for example `http://127.0.0.1:8080`). The instance is not bundled and is never selected or contacted without configuration. Remote instances must use HTTPS and receive your queries; trust their operator. Some instances disable JSON or have blocked upstream engines. No SearXNG API key is required; see [SearXNG Search API](https://docs.searxng.org/dev/search_api.html). For CLI use `dork-scraper -e bing_rss -d 'site:example.com'` or `-e searxng` after configuring the instance.
+Optionally, run your own [SearXNG](https://docs.searxng.org/) with JSON output enabled and enter its URL in **Provider settings**, or set `SEARXNG_URL` before launching the workspace (for example `http://127.0.0.1:8080`). The instance is not bundled and is never selected or contacted without configuration. Remote instances must use HTTPS and receive your queries; trust their operator. Some instances disable JSON or have blocked upstream engines. No SearXNG API key is required; see [SearXNG Search API](https://docs.searxng.org/dev/search_api.html). For CLI use `dork-scraper -e bing_rss -d 'site:example.com'` or `-e searxng` after configuring the instance.
 
 ### Brave Search
 
-Brave requires a [Brave Search API subscription and key](https://api-dashboard.search.brave.com/api-reference/web/search/get); provider fees or quotas may apply. Configure the key **in the server environment**, not in a URL or saved workspace:
+Brave requires a [Brave Search API subscription and key](https://api-dashboard.search.brave.com/api-reference/web/search/get); provider fees or quotas may apply. Configure the key in **Provider settings** in the local panel, or set it in the server environment for the CLI and panel:
 
 ```bash
 export BRAVE_API_KEY="your-api-key"  # PowerShell: $env:BRAVE_API_KEY="your-api-key"
@@ -88,13 +88,13 @@ Brave's API supports up to 10 pages and 20 results per page. Search engines may 
 ### Troubleshooting provider results
 
 - Start with `site:example.com` to include the apex and subdomains; `site:*.example.com` keeps **only subdomains**. Then add filters one at a time. A single `inurl:"?name="` is enforced as a literal URL substring, not as `&name=`. Indexed results can be incomplete or absent.
-- Bing RSS is selected by default even when API keys exist. Unconfigured API providers are disabled; configure their key and restart the panel to enable them. A key being present does not guarantee validity or quota.
+- Bing RSS is selected by default even when API keys exist. Optional providers can be selected immediately; open **Provider settings** to configure any required key or SearXNG URL before searching. A key being present does not guarantee validity or quota.
 - CAPTCHA, HTTP 403/429, JavaScript-only Google pages and Yahoo HTTP 500 are provider-side responses, not evidence the target has no pages. The panel stops requesting a blocked provider or JavaScript-only Google for the rest of that job and shows skipped searches explicitly; try later or choose another provider. It does not bypass challenges.
 - SerpApi may report a successful empty Google search in an `error` field; this is treated as zero results. Actual HTTP failures display a sanitized category without exposing the API key. Check your account, quota and provider status when needed.
 
 ### Google and DuckDuckGo via SerpApi (optional third party)
 
-Direct Google or DuckDuckGo can return a challenge or block. As an alternative, select **Google via SerpApi** or **DuckDuckGo via SerpApi** in the panel, or use `-e serpapi_google` or `-e serpapi_duckduckgo` in the CLI. These are separately selected providers, not an automatic fallback; they can still fail or be unavailable. DuckDuckGo pagination follows the next offset provided by SerpApi and stops when no next page is offered. This is a third-party service, **not an official Google API**. It needs a [SerpApi account and API key](https://serpapi.com/manage-api-key) and may use a paid plan; check [current quotas and prices](https://serpapi.com/pricing). Queries and result data are sent to SerpApi and may be retained by the service; review its terms and privacy policy. Do not paste your API key into the UI, a dork or an output file.
+Direct Google or DuckDuckGo can return a challenge or block. As an alternative, select **Google via SerpApi** or **DuckDuckGo via SerpApi** in the panel, or use `-e serpapi_google` or `-e serpapi_duckduckgo` in the CLI. These are separately selected providers, not an automatic fallback; they can still fail or be unavailable. DuckDuckGo pagination follows the next offset provided by SerpApi and stops when no next page is offered. This is a third-party service, **not an official Google API**. It needs a [SerpApi account and API key](https://serpapi.com/manage-api-key) and may use a paid plan; check [current quotas and prices](https://serpapi.com/pricing). Queries and result data are sent to SerpApi and may be retained by the service; review its terms and privacy policy. Enter your key only in the dedicated password field in **Provider settings**, or use an environment variable. Never put it in a dork, output file, or chat.
 
 ```bash
 export SERPAPI_API_KEY="your-api-key"  # PowerShell: $env:SERPAPI_API_KEY="your-api-key"
@@ -102,7 +102,7 @@ dork-scraper-web
 # Or: dork-scraper -e serpapi_google -d 'site:example.com'
 ```
 
-Set the environment variable **before starting** the process, and restart the panel after changing it. SerpApi authenticates by a URL query parameter over HTTPS; the application avoids displaying or persisting that URL and suppresses credential-bearing request errors. Search requests can use your quota; the tool does not automatically retry SerpApi searches. A valid key and provider availability are still required; no results does not establish that matching pages do not exist.
+Panel settings are kept only in the server process memory and are not stored in the browser or search history; they are lost at restart. Clear overrides an environment setting for the current session; environment values return on restart. Settings show whether a value is present, not whether it is valid. For environment configuration, set the variable **before starting** the process. SerpApi authenticates by a URL query parameter over HTTPS; the application avoids displaying or persisting that URL and suppresses credential-bearing request errors. Search requests can use your quota; the tool does not automatically retry SerpApi searches. A valid key and provider availability are still required; no results does not establish that matching pages do not exist.
 
 
 ---

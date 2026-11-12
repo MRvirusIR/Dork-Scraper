@@ -6,6 +6,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [3.0.0] - Unreleased
 
 ### Added
+- Select optional providers and configure their credentials or SearXNG URL in the local panel; settings stay in process memory only, and can be cleared.
 - Keyless Bing RSS default, opt-in keyless fallback chain and optional user-configured SearXNG JSON instance; report provider filtering and partial upstream errors.
 - Optional visible Selenium session in the web panel: users can solve challenges themselves in the same browser session, with progress, timeout and cancellation.
 - Optional Google search through the third-party SerpApi service with `SERPAPI_API_KEY`; no automatic retries. Correctly classify its successful empty results and show safe, actionable HTTP errors.

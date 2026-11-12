@@ -10,6 +10,7 @@ from dorkscraper.utils import clean_urls
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(webapp, 'DB_PATH', tmp_path / 'test.db')
+    monkeypatch.setattr(webapp, 'PROVIDER_SETTINGS', {})
     webapp.CANCEL.clear()
     webapp.init_db()
     with TestClient(webapp.app, base_url='http://127.0.0.1:8765') as c:
@@ -484,3 +485,56 @@ def test_closed_interactive_browser_reports_short_error(monkeypatch):
     monkeypatch.setattr(DorkScraper,'_get_driver',lambda self:Closed())
     r=DorkScraper(engine='google',use_selenium=True,headless=False,manual_captcha=True,retries=2).scrape('site:example.com')
     assert 'window was closed' in r.error and 'sensitive lengthy' not in r.error
+
+
+def test_provider_settings_security_validation_and_clear(client, monkeypatch):
+    import threading
+    for n in webapp.SETTING_NAMES: monkeypatch.delenv(n, raising=False)
+    secret = 'sample-secret-for-tests'
+    assert client.post('/api/config', json={'SERPAPI_API_KEY': secret}).status_code == 403
+    r = client.post('/api/config', headers=headers(), json={'SERPAPI_API_KEY': secret})
+    assert r.status_code == 200 and r.json()['serpapi_google_configured']
+    assert secret not in r.text and secret not in client.get('/api/config').text
+    assert 'SERPAPI_API_KEY' not in __import__('os').environ
+    assert secret not in repr(DorkScraper(provider_settings={'SERPAPI_API_KEY': secret}))
+    for bad in ('http://remote.example', 'https://name:secret@example.com', 'https://example.com/?token=secret', 'https://exam\nple.com'):
+        r = client.post('/api/config', headers=headers(), json={'BRAVE_API_KEY': 'unused-secret', 'SEARXNG_URL': bad})
+        assert r.status_code == 422 and 'unused-secret' not in r.text and 'secret' not in r.text
+        assert not client.get('/api/config').json()['brave_configured']
+    assert client.post('/api/config', headers=headers(), json={'BRAVE_API_KEY': 'a b'}).status_code == 422
+    assert client.post('/api/config', headers=headers(), json={'INVALID': secret}).status_code == 422
+    assert client.post('/api/config', headers=headers(), content='x'*8193).status_code == 413
+    webapp.CANCEL['fake'] = threading.Event()
+    assert client.post('/api/config', headers=headers(), json={'BRAVE_API_KEY':'sample'}).status_code == 409
+    webapp.CANCEL.clear()
+    assert client.post('/api/config', headers=headers(), json={'SEARXNG_URL':'http://127.0.0.1:8080'}).json()['searxng_configured']
+    monkeypatch.setenv('SERPAPI_API_KEY','environment-value')
+    assert not client.post('/api/config', headers=headers(), json={'SERPAPI_API_KEY':''}).json()['serpapi_google_configured']
+    webapp.PROVIDER_SETTINGS.clear()
+    assert client.get('/api/config').json()['serpapi_google_configured']
+
+
+def test_settings_snapshot_used_without_persisting_secrets(client, monkeypatch):
+    monkeypatch.delenv('SERPAPI_API_KEY', raising=False)
+    secret = 'sample-secret-for-tests'
+    seen = []
+    class FakeResponse:
+        status_code = 200
+        text = '{"organic_results":[{"link":"https://example.com/from-api"}]}'
+        def raise_for_status(self): pass
+    def get(url, **kw):
+        seen.append(kw.get('params', {}).get('api_key'))
+        return FakeResponse()
+    monkeypatch.setattr('dorkscraper.core.requests.get', get)
+    assert client.post('/api/config', headers=headers(), json={'SERPAPI_API_KEY':secret}).status_code == 200
+    r = client.post('/api/jobs', headers=headers(), json={'queries':['site:example.com'],'engines':['serpapi_google'],'delay':1})
+    assert r.status_code == 202
+    for _ in range(150):
+        job = client.get('/api/jobs/'+r.json()['id']).json()
+        if job['status'] not in ('queued','running'): break
+        time.sleep(.02)
+    assert job['status'] == 'completed' and seen == [secret]
+    assert [x['url'] for x in job['items']] == ['https://example.com/from-api']
+    assert secret not in str(job) and secret not in client.get('/api/jobs').text
+    with webapp.db() as db:
+        assert secret not in str(db.execute('SELECT data FROM jobs').fetchall()[0]['data'])
