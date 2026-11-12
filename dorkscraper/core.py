@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -53,6 +54,7 @@ class SearchResult:
     effective_query: Optional[str] = None
     literal_filter: Optional[str] = None
     literal_filtered_count: int = 0
+    warning: Optional[str] = None
 
     @property
     def count(self) -> int:
@@ -74,6 +76,10 @@ class DorkScraper:
     headless: bool = True
     log: Optional[LogFn] = None
     clean_opts: dict = field(default_factory=dict)
+    manual_captcha: bool = False
+    challenge_timeout: int = 120
+    cancel_event: object = None
+    challenge_notice: Optional[Callable[[str], None]] = None
 
     _driver: object = field(default=None, init=False, repr=False)
 
@@ -118,7 +124,7 @@ class DorkScraper:
                 if status in details:
                     message += ": " + details[status]
                 raise ValueError(message) from None
-        resp = requests.get(url, headers=headers, proxies=proxies, timeout=self.timeout, allow_redirects=self.engine.lower() != "brave")
+        resp = requests.get(url, headers=headers, proxies=proxies, timeout=self.timeout, allow_redirects=self.engine.lower() not in ("brave", "searxng"))
         resp.raise_for_status()
         return resp.text
 
@@ -137,14 +143,50 @@ class DorkScraper:
         opts.add_argument(f"--user-agent={_random_ua()}")
         if self.proxy:
             opts.add_argument(f"--proxy-server={self.proxy}")
-        self._driver = webdriver.Chrome(options=opts)
+        try:
+            self._driver = webdriver.Chrome(options=opts)
+        except Exception:  # Browser/driver setup errors must not leak long local stack traces.
+            raise RuntimeError("Could not start Chrome/Chromium. Install a compatible browser and Selenium driver; a graphical display is required for manual challenges.") from None
         return self._driver
 
     def _fetch_selenium(self, url: str) -> str:
         driver = self._get_driver()
-        driver.get(url)
+        try:
+            driver.get(url)
+        except Exception:
+            raise RuntimeError("Browser navigation failed or the window was closed; retry the search.") from None
+        def browser_source():
+            try:
+                return driver.page_source
+            except Exception:
+                raise RuntimeError("Browser window was closed or became unavailable; retry the search.") from None
         time.sleep(2 + random.random() * 2)
-        return driver.page_source
+        html = browser_source()
+        if not self.manual_captcha or not get_engine(self.engine).is_blocked(html):
+            return html
+        notice = "Solve the challenge in the opened browser window. Waiting up to %s seconds." % self.challenge_timeout
+        self._emit("warn", notice)
+        if self.challenge_notice:
+            self.challenge_notice(notice)
+        try:
+            deadline = time.monotonic() + self.challenge_timeout
+            while time.monotonic() < deadline:
+                if self.cancel_event is not None and self.cancel_event.wait(1):
+                    break
+                if self.cancel_event is None:
+                    time.sleep(1)
+                html = browser_source()
+                if not get_engine(self.engine).is_blocked(html):
+                    # Navigation can briefly produce a blank page after the challenge.
+                    # Wait for recognizable results or a no-results message.
+                    lower = html.lower()
+                    no_results = ("no results found" in lower or "did not match any documents" in lower)
+                    if get_engine(self.engine).parse(html) or no_results:
+                        return html
+            return html
+        finally:
+            if self.challenge_notice:
+                self.challenge_notice("")
 
     def _fetch(self, url: str) -> str:
         last_exc: Optional[Exception] = None
@@ -152,8 +194,10 @@ class DorkScraper:
             raise ValueError("Brave requires the BRAVE_API_KEY environment variable")
         if self.engine.lower() in ("serpapi_google", "serpapi_duckduckgo") and not os.environ.get("SERPAPI_API_KEY"):
             raise ValueError("SerpApi requires the SERPAPI_API_KEY environment variable")
-        if self.engine.lower() in ("brave", "serpapi_google", "serpapi_duckduckgo") and self.use_selenium:
-            raise ValueError("API providers cannot be used with Selenium")
+        if self.engine.lower() in ("brave", "searxng", "serpapi_google", "serpapi_duckduckgo", "bing_rss") and self.use_selenium:
+            raise ValueError("This provider cannot be used with Selenium")
+        if self.manual_captcha and (not self.use_selenium or self.headless):
+            raise ValueError("Manual CAPTCHA requires a visible Selenium browser")
         # Never retry potentially billable SerpApi searches automatically.
         attempts = 1 if self.engine.lower() in ("serpapi_google", "serpapi_duckduckgo") else self.retries + 1
         for attempt in range(1, attempts + 1):
@@ -163,6 +207,8 @@ class DorkScraper:
                 return self._fetch_http(url)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
+                if isinstance(exc, (ValueError, RuntimeError)):
+                    break
                 if (isinstance(exc, requests.HTTPError) and exc.response is not None
                         and exc.response.status_code in (403, 429)):
                     break  # Don't repeatedly request a provider that denied or rate-limited us.
@@ -181,6 +227,7 @@ class DorkScraper:
         result = SearchResult(dork=dork, engine=engine.name, effective_query=engine_query(dork))
         collected: List[str] = []
         offset = 0
+        seen_pages = set()
         for page in range(self.pages):
             self._emit("info", f"[{engine.name}] page {page + 1}/{self.pages}: {dork}")
             try:
@@ -192,7 +239,9 @@ class DorkScraper:
             except Exception as exc:  # noqa: BLE001
                 if isinstance(exc, requests.HTTPError) and exc.response is not None:
                     code = exc.response.status_code
-                    if code in (403, 429):
+                    if code == 403 and engine.name == "searxng":
+                        result.error = "SearXNG denied the request (HTTP 403); enable JSON format and check instance access."
+                    elif code in (403, 429):
                         result.blocked = True
                         result.error = f"{engine.name} denied or rate-limited this request (HTTP {code}); try later."
                     elif code >= 500:
@@ -213,13 +262,25 @@ class DorkScraper:
                 result.error = "Failed to parse search response: " + str(exc)
                 self._emit("error", result.error)
                 break
-            collected.extend(found)
+            if engine.name == "searxng":
+                meta = json.loads(html)
+                if meta.get('unresponsive_engines'):
+                    result.warning = "Some SearXNG upstream engines were unavailable; results may be incomplete."
             result.pages_fetched += 1
+            page_signature = tuple(found)
+            if found and page_signature in seen_pages:
+                result.warning = "Provider repeated a results page; pagination stopped."
+                break
+            if found:
+                seen_pages.add(page_signature)
+            collected.extend(found)
             self._emit("info", f"  -> {len(found)} raw URLs on this page")
             if not found:
                 if engine.name == "google" and ("/httpservice/retry/enablejs" in html or "enable JavaScript" in html):
                     result.error = "Google returned a JavaScript-only page; try another provider or Selenium."
                     self._emit("warn", result.error)
+                elif engine.name in ("google", "bing", "duckduckgo", "yahoo"):
+                    result.warning = "No URLs parsed; the provider may have returned no results or changed its page."
                 break
             if page + 1 < self.pages:
                 if engine.name == "serpapi_duckduckgo":
@@ -245,7 +306,13 @@ class DorkScraper:
             self._emit('warn', result.scope_warning)
         elif result.out_of_scope_count:
             self._emit('info', f'Scope guard removed {result.out_of_scope_count} out-of-scope URLs')
+        if valid and not scoped and result.out_of_scope_count == len(valid):
+            warning = 'All provider results were outside the requested site scope; the provider may have ignored site:.'
+            result.warning = (result.warning + ' ' if result.warning else '') + warning
         scoped, result.literal_filtered_count, result.literal_filter = apply_literal_query_filter(dork, scoped)
+        if result.literal_filtered_count and not scoped:
+            warning = 'No results contained the exact requested URL substring.'
+            result.warning = (result.warning + ' ' if result.warning else '') + warning
         post_opts = dict(self.clean_opts)
         post_opts['strip_tracking'] = False
         result.urls = clean_urls(scoped, **post_opts)

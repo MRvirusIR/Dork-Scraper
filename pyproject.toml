@@ -17,7 +17,7 @@ classifiers = [
   "Topic :: Security",
   "Environment :: Console",
 ]
-dependencies = ["requests>=2.31", "beautifulsoup4>=4.12", "rich>=13.0", "fake-useragent>=1.4"]
+dependencies = ["requests>=2.31", "beautifulsoup4>=4.12", "rich>=13.0", "fake-useragent>=1.4", "defusedxml>=0.7.1"]
 
 [project.optional-dependencies]
 selenium = ["selenium>=4.15"]

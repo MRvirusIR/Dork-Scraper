@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import urllib.parse
 from abc import ABC, abstractmethod
 from typing import Dict, List, Type
 
 from bs4 import BeautifulSoup
+from defusedxml import ElementTree as SafeXML
 
 
 class Engine(ABC):
@@ -91,6 +93,31 @@ class BingEngine(Engine):
         return [u for u in urls if u.startswith("http")]
 
 
+class BingRSSEngine(Engine):
+    """Bing's keyless RSS search interface, subject to upstream limits."""
+    name = "bing_rss"
+    per_page = 10
+
+    def build_url(self, dork: str, page: int) -> str:
+        return "https://www.bing.com/search?" + urllib.parse.urlencode(
+            {"q": dork, "format": "rss", "count": self.per_page,
+             "first": page * self.per_page + 1})
+
+    def parse(self, text: str) -> List[str]:
+        try:
+            root = SafeXML.fromstring(text)
+        except Exception as exc:
+            raise ValueError("Bing returned invalid RSS") from exc
+        if root.tag != "rss" or root.find("channel") is None:
+            raise ValueError("Bing returned invalid RSS")
+        urls = []
+        for item in root.findall("./channel/item"):
+            url = (item.findtext("link") or "").strip()
+            if url.startswith(("http://", "https://")):
+                urls.append(url)
+        return urls
+
+
 class DuckDuckGoEngine(Engine):
     name = "duckduckgo"
     per_page = 30
@@ -154,6 +181,38 @@ class BraveEngine(Engine):
 
     @staticmethod
     def is_blocked(html: str) -> bool:
+        return False
+
+
+class SearXNGEngine(Engine):
+    """A user-configured SearXNG instance with JSON enabled; no key."""
+    name = "searxng"
+
+    def build_url(self, dork: str, page: int) -> str:
+        base = os.environ.get("SEARXNG_URL", "").strip()
+        try:
+            parsed = urllib.parse.urlsplit(base)
+            host = parsed.hostname
+            port = parsed.port  # validate invalid port syntax
+        except ValueError:
+            raise ValueError("Invalid SEARXNG_URL") from None
+        if (not host or parsed.scheme not in ("http", "https") or parsed.username or parsed.password
+                or parsed.query or parsed.fragment
+                or (parsed.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"))):
+            raise ValueError("SEARXNG_URL must be HTTPS or local HTTP, without credentials or query")
+        path = parsed.path.rstrip('/') + '/search'
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, urllib.parse.urlencode(
+            {"q": dork, "format": "json", "pageno": page + 1}), ''))
+
+    def parse(self, text: str) -> List[str]:
+        data = json.loads(text)
+        if not isinstance(data, dict) or not isinstance(data.get('results'), list):
+            raise ValueError("Invalid SearXNG JSON response; enable JSON format on the instance")
+        return [item['url'] for item in data['results'] if isinstance(item, dict)
+                and isinstance(item.get('url'), str)]
+
+    @staticmethod
+    def is_blocked(text: str) -> bool:
         return False
 
 
@@ -244,7 +303,7 @@ def _is_engine_internal(url: str, needles) -> bool:
 
 
 ENGINES: Dict[str, Type[Engine]] = {
-    cls.name: cls for cls in (GoogleEngine, BingEngine, DuckDuckGoEngine, YahooEngine, BraveEngine, SerpApiGoogleEngine, SerpApiDuckDuckGoEngine)
+    cls.name: cls for cls in (GoogleEngine, BingEngine, BingRSSEngine, DuckDuckGoEngine, YahooEngine, BraveEngine, SearXNGEngine, SerpApiGoogleEngine, SerpApiDuckDuckGoEngine)
 }
 
 

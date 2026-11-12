@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib.util
 import os
 import secrets
 import sqlite3
@@ -27,6 +28,7 @@ TOKEN = secrets.token_urlsafe(32)
 DB_PATH = Path(os.environ.get("DORK_SCRAPER_DB", Path.home() / ".dork-scraper" / "workspace.sqlite3"))
 DB_LOCK = threading.RLock()
 CANCEL = {}
+KEYLESS_FALLBACK = ('bing_rss', 'bing', 'duckduckgo', 'google', 'yahoo')
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -114,6 +116,8 @@ class SearchRequest(BaseModel):
     engines: List[str]
     pages: int = Field(default=1, ge=1, le=10)
     delay: float = Field(default=2, ge=1, le=60)
+    manual_browser: bool = False
+    keyless_fallback: bool = False
     options: Options = Field(default_factory=Options)
 
 
@@ -168,26 +172,49 @@ def present_job(job):
 
 def run_job(job, opts, cancel):
     job['status'] = 'running'; save(job)
+    scrapers = {}
+    def challenge_notice(message):
+        job['notice'] = message
+        save(job)
     try:
         results = []
         unavailable = {}
         total = len(job['queries']) * len(job['engines'])
         for query in job['queries']:
+            matched = False
             for engine in job['engines']:
                 if cancel.is_set():
                     job['status'] = 'cancelled'; return
-                if engine in unavailable:
+                if job.get('keyless_fallback') and matched:
+                    results.append({'query': query, 'engine': engine, 'urls': [], 'pages_fetched': 0,
+                                    'blocked': False, 'error': None, 'skip_kind': 'not_needed',
+                                    'skipped_reason': 'Skipped: an earlier keyless provider found matching URLs.'})
+                elif engine in unavailable:
                     results.append({'query': query, 'engine': engine, 'urls': [], 'pages_fetched': 0,
                                     'blocked': False, 'error': None, 'skipped_reason': unavailable[engine]})
                 else:
-                    with DorkScraper(engine=engine, pages=job['pages'], delay=job['delay'],
-                                     jitter=1, timeout=15, retries=1, clean_opts=opts) as scraper:
-                        result = scraper.scrape(query)
+                    interactive = job.get('manual_browser', False) and engine in ('google', 'duckduckgo')
+                    if engine not in scrapers:
+                        scrapers[engine] = DorkScraper(engine=engine, pages=job['pages'], delay=job['delay'],
+                                                      jitter=1, timeout=15, retries=1, clean_opts=opts,
+                                                      use_selenium=interactive, headless=not interactive,
+                                                      manual_captcha=interactive, cancel_event=cancel,
+                                                      challenge_notice=challenge_notice)
+                    if interactive:
+                        challenge_notice('Interactive browser running for %s; use the opened window if a challenge appears.' % engine)
+                    result = scrapers[engine].scrape(query)
+                    if interactive:
+                        challenge_notice('')
+                    if cancel.is_set():
+                        job['status'] = 'cancelled'; return
                     results.append({'query': query, 'engine': engine, 'urls': result.urls,
                                     'pages_fetched': result.pages_fetched, 'blocked': result.blocked,
                                     'error': result.error, 'out_of_scope_count': result.out_of_scope_count,
                                     'scope_warning': result.scope_warning, 'effective_query': result.effective_query or query,
-                                    'literal_filter': result.literal_filter, 'literal_filtered_count': result.literal_filtered_count})
+                                    'literal_filter': result.literal_filter, 'literal_filtered_count': result.literal_filtered_count,
+                                    'warning': result.warning})
+                    if job.get('keyless_fallback') and result.urls:
+                        matched = True
                     if result.blocked:
                         unavailable[engine] = 'Skipped after provider block or rate limit; try later.'
                     elif engine == 'google' and result.error and 'JavaScript-only' in result.error:
@@ -195,13 +222,16 @@ def run_job(job, opts, cancel):
                 job['results'] = results
                 job['completed'] = len(results)
                 save(job)
-                if len(results) < total and cancel.wait(job['delay']):
+                if len(results) < total and not results[-1].get('skipped_reason') and cancel.wait(job['delay']):
                     job['status'] = 'cancelled'; return
         job['status'] = 'completed'
     except Exception as exc:
         job['status'] = 'failed'
         job['error'] = str(exc)
     finally:
+        for scraper in scrapers.values():
+            scraper.close()
+        job['notice'] = ''
         save(job)
         with DB_LOCK:
             CANCEL.pop(job['id'], None)
@@ -225,7 +255,8 @@ def css():
 @app.get('/api/config')
 def config():
     return {'engines': sorted(ENGINES), 'brave_configured': bool(os.environ.get('BRAVE_API_KEY')),
-            'serpapi_google_configured': bool(os.environ.get('SERPAPI_API_KEY'))}
+            'serpapi_google_configured': bool(os.environ.get('SERPAPI_API_KEY')),
+            'searxng_configured': bool(os.environ.get('SEARXNG_URL'))}
 
 
 @app.post('/api/clean')
@@ -248,11 +279,17 @@ def get_job(job_id: str):
 @app.post('/api/jobs', status_code=202)
 def create_job(body: SearchRequest):
     queries = normalize_query_input(body.queries)
-    engines = list(dict.fromkeys(body.engines))
+    engines = list(KEYLESS_FALLBACK) if body.keyless_fallback else list(dict.fromkeys(body.engines))
     if not queries or len(queries) > 20 or any(len(q) > 600 for q in queries):
         raise HTTPException(422, 'Provide 1–20 queries, each up to 600 characters')
     if not engines or any(e not in ENGINES for e in engines):
         raise HTTPException(422, 'Select valid search engines')
+    if body.manual_browser and not any(e in engines for e in ('google', 'duckduckgo')):
+        raise HTTPException(422, 'Interactive browser requires direct Google or DuckDuckGo.')
+    if body.manual_browser and importlib.util.find_spec('selenium') is None:
+        raise HTTPException(422, 'Interactive browser requires Selenium; install dork-scraper[selenium].')
+    if 'searxng' in engines and not os.environ.get('SEARXNG_URL'):
+        raise HTTPException(422, 'SearXNG requires SEARXNG_URL for an instance with JSON enabled.')
     if 'brave' in engines and not os.environ.get('BRAVE_API_KEY'):
         raise HTTPException(422, 'Brave requires BRAVE_API_KEY; configure it or deselect Brave.')
     if any(e in engines for e in ('serpapi_google', 'serpapi_duckduckgo')) and not os.environ.get('SERPAPI_API_KEY'):
@@ -264,6 +301,7 @@ def create_job(body: SearchRequest):
         job = {'id': uuid.uuid4().hex, 'created': time.time(), 'status': 'queued',
                'queries': queries, 'engines': engines, 'pages': body.pages, 'delay': body.delay,
                'completed': 0, 'total': len(queries)*len(engines), 'results': [], 'error': None,
+               'manual_browser': body.manual_browser, 'keyless_fallback': body.keyless_fallback, 'notice': '',
                'unique_mode': opts['unique_mode']}
         cancel = threading.Event(); CANCEL[job['id']] = cancel
         save(job)
