@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="workspace-token"]').content;
 let currentJob = null, timer = null, resultRows = [], cleanRows = [];
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const engineName = s => s === 'serpapi_google' ? 'Google via SerpApi' : cap(s);
 let toastTimer;
 function toast(message) { $('toast').textContent = message; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500); }
 async function api(path, method='GET', body) {
@@ -32,7 +33,7 @@ function safeCsv(value) { let s=String(value); if (/^[\s\x00-\x1f]*[=+@\-\t\r]/.
 function renderResults() {
   const needle=$('result-filter').value.toLowerCase(); const filtered=resultRows.filter(r => `${r.url} ${r.sources.join(' ')}`.toLowerCase().includes(needle));
   $('result-count').textContent=String(resultRows.length);
-  setChildren($('search-results'), filtered.length ? filtered.map(r=>urlRow(r.url, r.sources.join('  ·  '))) : [empty('No results to show', resultRows.length ? 'Try another filter.' : 'Check the engine statuses or try a different query.')]);
+  setChildren($('search-results'), filtered.length ? filtered.map(r=>urlRow(r.url, r.sources.join('  ·  '))) : [empty('No results to show', resultRows.length ? 'Try another filter.' : 'No matching URLs were returned. Check provider errors and filters; this does not prove URLs do not exist.')]);
   $('result-controls').hidden = resultRows.length === 0;
 }
 $('result-filter').addEventListener('input', renderResults);
@@ -44,9 +45,11 @@ function renderJob(job) {
   const running=['queued','running'].includes(job.status);
   $('cancel').hidden=!running; $('progress-wrap').hidden=false;
   $('progress').style.width=`${job.total ? Math.round(job.completed / job.total * 100) : 0}%`;
-  $('progress-label').textContent=`${cap(job.status)} · ${job.completed} / ${job.total} searches completed`;
+  const failed=job.results.some(r=>r.blocked || r.error);
+  const label=job.status==='completed' ? (failed ? 'Finished with provider errors' : 'Finished') : cap(job.status);
+  $('progress-label').textContent=`${label} · ${job.completed} / ${job.total} searches processed`;
   $('result-subtitle').textContent=job.queries.join('  ·  ');
-  const statuses=job.results.map(r => {const div=document.createElement('div'); div.className='status-item'+(r.blocked || r.error ? ' error' : ''); const effective=r.effective_query && r.effective_query !== r.query ? ` · Sent: ${r.effective_query}` : ''; const literal=r.literal_filter ? ` · Exact URL contains ${r.literal_filter}: ${r.literal_filtered_count || 0} removed` : ''; const scope=r.scope_warning ? ` · ${r.scope_warning}` : ` · Scope guard: ${r.out_of_scope_count || 0} out-of-scope URLs removed`; div.textContent=`${cap(r.engine)} · ${r.query} — ${r.blocked ? 'Blocked / CAPTCHA' : r.error ? 'Error: '+r.error : `${r.urls.length} URLs · ${r.pages_fetched} pages`}${scope}${literal}${effective}`; return div;});
+  const statuses=job.results.map(r => {const div=document.createElement('div'); div.className='status-item'+(r.blocked || r.error ? ' error' : ''); const effective=r.effective_query && r.effective_query !== r.query ? ` · Sent: ${r.effective_query}` : ''; const literal=r.literal_filter ? ` · Exact URL contains ${r.literal_filter}: ${r.literal_filtered_count || 0} removed` : ''; const scope=r.scope_warning ? ` · ${r.scope_warning}` : ` · Scope guard: ${r.out_of_scope_count || 0} out-of-scope URLs removed`; div.textContent=`${engineName(r.engine)} · ${r.query} — ${r.blocked ? 'Blocked / CAPTCHA' : r.error ? 'Error: '+r.error : `${r.urls.length} URLs · ${r.pages_fetched} pages`}${scope}${literal}${effective}`; return div;});
   if(job.error) { const div=document.createElement('div'); div.className='status-item error'; div.textContent=job.error; statuses.push(div); }
   setChildren($('search-status'),statuses);
   resultRows=job.items || []; renderResults();
@@ -60,5 +63,5 @@ $('clean-json').onclick=()=>download('clean-urls.json',JSON.stringify(cleanRows,
 $('file').addEventListener('change',async e=>{const f=e.target.files[0]; if(!f)return; if(f.size>2*1024*1024){toast('File exceeds the 2 MB limit.'); e.target.value=''; return;} try{$('urls').value=await f.text(); $('file-label').textContent=f.name;}catch(_){toast('Could not read this file.');}});
 async function loadHistory(){try {const jobs=await api('/api/jobs'); const nodes=jobs.map(j=>{const row=document.createElement('div');row.className='history-row';const info=document.createElement('div');const b=document.createElement('b');b.textContent=j.queries.join(' · ');const sm=document.createElement('small');sm.textContent=`${new Date(j.created*1000).toLocaleString()} · ${j.engines.join(', ')} · ${j.status} · ${j.completed}/${j.total}`;info.append(b,sm);const actions=document.createElement('div');actions.className='actions';const open=document.createElement('button');open.className='secondary';open.textContent='Open';open.onclick=()=>{clearTimeout(timer);view('search');renderJob(j);};const del=document.createElement('button');del.className='secondary';del.textContent='Delete';del.onclick=async()=>{if(!confirm('Delete this search history?'))return;try{await api('/api/jobs/'+j.id,'DELETE');loadHistory();}catch(e){toast(e.message);}};actions.append(open,del);row.append(info,actions);return row;});setChildren($('history-list'),nodes.length?nodes:[empty('No searches yet','Your completed searches will appear here.')]);}catch(e){toast(e.message);}}
 $('refresh-history').onclick=loadHistory;
-async function setup(){try {const config=await api('/api/config');const nodes=config.engines.map(engine=>{const label=document.createElement('label');label.className='engine';const input=document.createElement('input');input.type='checkbox';input.value=engine;input.checked=engine==='duckduckgo'; const text=document.createElement('span'); text.textContent=cap(engine)+(engine==='brave'&&!config.brave_configured?' · API key required':'');label.append(input,text);return label;});setChildren($('engines'),nodes); const jobs=await api('/api/jobs'); const active=jobs.find(j=>['running','queued'].includes(j.status));if(active)renderJob(active);}catch(e){toast(e.message);}}
+async function setup(){try {const config=await api('/api/config');const nodes=config.engines.map(engine=>{const label=document.createElement('label');label.className='engine';const input=document.createElement('input');input.type='checkbox';input.value=engine;input.checked=engine==='duckduckgo'; const text=document.createElement('span'); text.textContent=(engine==='serpapi_google' ? 'Google via SerpApi' : cap(engine)) + ((engine==='brave'&&!config.brave_configured) || (engine==='serpapi_google'&&!config.serpapi_google_configured) ? ' · API key required' : '');label.append(input,text);return label;});setChildren($('engines'),nodes); const jobs=await api('/api/jobs'); const active=jobs.find(j=>['running','queued'].includes(j.status));if(active)renderJob(active);}catch(e){toast(e.message);}}
 setup();

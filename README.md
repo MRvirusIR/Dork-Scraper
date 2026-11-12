@@ -8,7 +8,7 @@
 
 <p align="center">
   <b>A local recon workspace and multi-engine URL scraper for authorized security research.</b><br>
-  Search Google, Bing, DuckDuckGo, Yahoo &amp; Brave — then clean, filter and export results.
+  Search Google, Bing, DuckDuckGo, Yahoo, Brave &amp; Google via SerpApi — then clean, filter and export results.
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 
 - **Local web workspace** — responsive search, URL cleaner, dark/light theme, and local history.
 - **Multi-engine searches** — run multiple queries across selected engines, combine results, track their source, and export TXT, JSON or CSV.
-- **Brave Search API** — optional official API provider, using your own API key.
+- **API providers** — Brave Search API and Google results via the third-party SerpApi service, using your own API keys.
 - **URL Cleaner** — paste or import a list, preview cleaned URLs alongside their first original, and export; no target URLs are contacted.
 - **Local jobs** — per-engine status and errors, progress, cancellation and SQLite history.
 - **Safer validation** — rejects invalid URL schemes, invalid ports and URLs containing credentials.
@@ -68,6 +68,19 @@ dork-scraper -e brave -d 'site:example.com'
 ```
 
 Brave's API supports up to 10 pages and 20 results per page. Search engines may change HTML or return blocks/CAPTCHAs; the workspace reports per-engine errors, but cannot guarantee availability or completeness. No CAPTCHA bypass is provided.
+
+### Google via SerpApi (optional third party)
+
+The HTML Google provider may return a JavaScript-only page. As an alternative, select **Google via SerpApi** in the panel, or use `-e serpapi_google` in the CLI. This is a third-party service, **not an official Google API**. It needs a [SerpApi account and API key](https://serpapi.com/manage-api-key) and may use a paid plan; check [current quotas and prices](https://serpapi.com/pricing). Queries and result data are sent to SerpApi and may be retained by the service; review its terms and privacy policy. Do not paste your API key into the UI, a dork or an output file.
+
+```bash
+export SERPAPI_API_KEY="your-api-key"  # PowerShell: $env:SERPAPI_API_KEY="your-api-key"
+dork-scraper-web
+# Or: dork-scraper -e serpapi_google -d 'site:example.com'
+```
+
+Set the environment variable **before starting** the process, and restart the panel after changing it. SerpApi authenticates by a URL query parameter over HTTPS; the application avoids displaying or persisting that URL and suppresses credential-bearing request errors. Search requests can use your quota; the tool does not automatically retry SerpApi searches. A valid key and provider availability are still required; no results does not establish that matching pages do not exist.
+
 
 ---
 
@@ -129,7 +142,7 @@ dork-scraper --clean-file old_urls.txt --drop-static --unique domain -o clean.tx
 |------|-------------|
 | `-d, --dork` | A dork query (repeatable) |
 | `-D, --dork-file` | File with one dork per line (`#` = comment) |
-| `-e, --engine` | `google` \| `bing` \| `duckduckgo` \| `yahoo` \| `brave` (default `google`) |
+| `-e, --engine` | `google` \| `bing` \| `duckduckgo` \| `yahoo` \| `brave` \| `serpapi_google` (default `google`) |
 | `-p, --pages` | Result pages per dork (default `1`) |
 | `-o, --output` | Output file (default `urls.txt`) |
 | `-f, --format` | `txt` \| `json` \| `csv` |

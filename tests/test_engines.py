@@ -2,7 +2,7 @@ from dorkscraper.engines import ENGINES, get_engine
 
 
 def test_all_engines_registered():
-    assert set(ENGINES) == {"google", "bing", "duckduckgo", "yahoo", "brave"}
+    assert set(ENGINES) == {"google", "bing", "duckduckgo", "yahoo", "brave", "serpapi_google"}
 
 
 def test_google_parse():
@@ -38,3 +38,12 @@ def test_google_js_only_page_is_reported(monkeypatch):
     monkeypatch.setattr(DorkScraper, '_fetch', lambda self, url: '<a href="/httpservice/retry/enablejs">Retry</a>')
     result = DorkScraper(engine='google').scrape('site:example.com')
     assert result.urls == [] and 'JavaScript-only' in result.error
+
+
+def test_serpapi_google_parse_and_pagination():
+    engine = get_engine('serpapi_google')
+    assert 'start=20' in engine.build_url('site:example.com', 2)
+    assert engine.parse('{"organic_results":[{"link":"https://example.com/"},{"title":"missing"}]}') == ['https://example.com/']
+    import pytest
+    with pytest.raises(ValueError, match='SerpApi returned an error'):
+        engine.parse('{"error":"secret should not be echoed"}')

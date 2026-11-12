@@ -135,3 +135,47 @@ def test_old_history_scope_filter_and_attribution(client):
     assert data['results'][0]['urls']==['https://a.bugcod3.com/']
     assert data['results'][0]['out_of_scope_count']==1
     assert [i['url'] for i in data['items']]==['https://a.bugcod3.com/']
+
+
+def test_serpapi_key_handling_and_no_retry(monkeypatch):
+    import requests
+    monkeypatch.setenv('SERPAPI_API_KEY','sensitive-key-123')
+    attempts=[]
+    def fail(url, **kwargs):
+        attempts.append((url,kwargs))
+        assert 'sensitive-key-123' not in url
+        assert kwargs['params']['api_key']=='sensitive-key-123'
+        assert kwargs['allow_redirects'] is False
+        raise requests.exceptions.ConnectionError('https://serpapi.com/?api_key=sensitive-key-123')
+    monkeypatch.setattr('dorkscraper.core.requests.get', fail)
+    result=DorkScraper(engine='serpapi_google', retries=3, delay=0).scrape('site:example.com')
+    assert len(attempts)==1 and 'network error' in result.error
+    assert 'sensitive-key-123' not in result.error
+
+
+def test_serpapi_provider_success(monkeypatch):
+    monkeypatch.setenv('SERPAPI_API_KEY','test-key')
+    class Response:
+        status_code=200
+        text='{"organic_results":[{"link":"https://example.com/?name=test"},{"link":"https://notexample.com/"}]}'
+        def raise_for_status(self): pass
+    monkeypatch.setattr('dorkscraper.core.requests.get',lambda *a,**kw: Response())
+    result=DorkScraper(engine='serpapi_google',retries=0).scrape('site:example.com inurl:"?name="')
+    assert result.urls==['https://example.com/?name=test']
+    assert result.out_of_scope_count==1
+
+
+def test_serpapi_missing_key_and_http_error_dont_leak(monkeypatch):
+    import requests
+    monkeypatch.delenv('SERPAPI_API_KEY', raising=False)
+    assert 'SERPAPI_API_KEY' in DorkScraper(engine='serpapi_google',delay=0).scrape('x').error
+    monkeypatch.setenv('SERPAPI_API_KEY','SECRET_DO_NOT_LOG')
+    class FakeResponse:
+        status_code=401
+        def raise_for_status(self):
+            response=requests.Response()
+            response.status_code=401
+            raise requests.HTTPError('https://serpapi.com/?api_key=SECRET_DO_NOT_LOG',response=response)
+    monkeypatch.setattr('dorkscraper.core.requests.get', lambda *a, **k: FakeResponse())
+    r=DorkScraper(engine='serpapi_google',retries=3,delay=0).scrape('site:example.com')
+    assert 'HTTP 401' in r.error and 'SECRET_DO_NOT_LOG' not in r.error
