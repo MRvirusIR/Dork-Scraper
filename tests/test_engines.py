@@ -47,3 +47,20 @@ def test_serpapi_google_parse_and_pagination():
     import pytest
     with pytest.raises(ValueError, match='SerpApi returned an error'):
         engine.parse('{"error":"secret should not be echoed"}')
+
+
+def test_serpapi_success_empty_is_not_an_error():
+    engine = get_engine('serpapi_google')
+    payload = '''{"search_metadata":{"status":"Success"},"search_information":{"organic_results_state":"Fully empty"},"error":"Google hasn't returned any results for this query."}'''
+    assert engine.parse(payload) == []
+    import pytest
+    with pytest.raises(ValueError):
+        engine.parse(payload.replace('Success', 'Error'))
+
+
+def test_captcha_word_in_result_is_not_blocked():
+    engine = get_engine('duckduckgo')
+    html = '<a class="result__a" href="https://example.com/captcha">What is CAPTCHA?</a>'
+    assert not engine.is_blocked(html)
+    assert engine.is_blocked('<div class="anomaly-modal">challenge</div>')
+    assert engine.parse(html) == ['https://example.com/captcha']

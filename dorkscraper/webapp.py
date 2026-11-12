@@ -170,19 +170,28 @@ def run_job(job, opts, cancel):
     job['status'] = 'running'; save(job)
     try:
         results = []
+        unavailable = {}
         total = len(job['queries']) * len(job['engines'])
         for query in job['queries']:
             for engine in job['engines']:
                 if cancel.is_set():
                     job['status'] = 'cancelled'; return
-                with DorkScraper(engine=engine, pages=job['pages'], delay=job['delay'],
-                                 jitter=1, timeout=15, retries=1, clean_opts=opts) as scraper:
-                    result = scraper.scrape(query)
-                results.append({'query': query, 'engine': engine, 'urls': result.urls,
-                                'pages_fetched': result.pages_fetched, 'blocked': result.blocked,
-                                'error': result.error, 'out_of_scope_count': result.out_of_scope_count,
-                                'scope_warning': result.scope_warning, 'effective_query': result.effective_query or query,
-                                'literal_filter': result.literal_filter, 'literal_filtered_count': result.literal_filtered_count})
+                if engine in unavailable:
+                    results.append({'query': query, 'engine': engine, 'urls': [], 'pages_fetched': 0,
+                                    'blocked': False, 'error': None, 'skipped_reason': unavailable[engine]})
+                else:
+                    with DorkScraper(engine=engine, pages=job['pages'], delay=job['delay'],
+                                     jitter=1, timeout=15, retries=1, clean_opts=opts) as scraper:
+                        result = scraper.scrape(query)
+                    results.append({'query': query, 'engine': engine, 'urls': result.urls,
+                                    'pages_fetched': result.pages_fetched, 'blocked': result.blocked,
+                                    'error': result.error, 'out_of_scope_count': result.out_of_scope_count,
+                                    'scope_warning': result.scope_warning, 'effective_query': result.effective_query or query,
+                                    'literal_filter': result.literal_filter, 'literal_filtered_count': result.literal_filtered_count})
+                    if result.blocked:
+                        unavailable[engine] = 'Skipped after provider block or rate limit; try later.'
+                    elif engine == 'google' and result.error and 'JavaScript-only' in result.error:
+                        unavailable[engine] = 'Skipped after JavaScript-only response; choose an API provider.'
                 job['results'] = results
                 job['completed'] = len(results)
                 save(job)

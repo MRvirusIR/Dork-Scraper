@@ -34,7 +34,9 @@ class Engine(ABC):
         lowered = html.lower()
         markers = (
             "unusual traffic",
-            "captcha",
+            "g-recaptcha",
+            "please complete the following challenge",
+            "captcha-delivery",
             "/sorry/index",
             "detected unusual",
             "anomaly-modal",
@@ -166,8 +168,19 @@ class SerpApiGoogleEngine(Engine):
 
     def parse(self, html: str) -> List[str]:
         data = json.loads(html)
-        if data.get("error"):
+        if not isinstance(data, dict):
+            raise ValueError("Invalid SerpApi response")
+        metadata = data.get("search_metadata") or {}
+        if not isinstance(metadata, dict):
+            raise ValueError("Invalid SerpApi response")
+        error = data.get("error")
+        no_results = (metadata.get("status") == "Success" and
+                      error == "Google hasn't returned any results for this query.")
+        if error and not no_results:
+            # Provider messages can contain secrets: never echo raw error text.
             raise ValueError("SerpApi returned an error; check account, quota and query")
+        if metadata.get("status") in ("Error", "Processing", "Queued"):
+            raise ValueError("SerpApi search did not complete successfully")
         results = data.get("organic_results") or []
         if not isinstance(results, list):
             raise ValueError("Invalid SerpApi response")

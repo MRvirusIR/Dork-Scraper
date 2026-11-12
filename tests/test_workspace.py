@@ -179,3 +179,77 @@ def test_serpapi_missing_key_and_http_error_dont_leak(monkeypatch):
     monkeypatch.setattr('dorkscraper.core.requests.get', lambda *a, **k: FakeResponse())
     r=DorkScraper(engine='serpapi_google',retries=3,delay=0).scrape('site:example.com')
     assert 'HTTP 401' in r.error and 'SECRET_DO_NOT_LOG' not in r.error
+
+
+@pytest.mark.parametrize('code,detail', [(401, 'invalid API key'), (429, 'limit reached'), (503, 'provider unavailable')])
+def test_serpapi_http_errors_are_safe_and_not_retried(monkeypatch, code, detail):
+    import requests
+    monkeypatch.setenv('SERPAPI_API_KEY', 'secret-test-key')
+    attempts = []
+    def fail(*args, **kwargs):
+        attempts.append(1)
+        response = requests.Response(); response.status_code = code
+        raise requests.HTTPError('secret-test-key', response=response)
+    monkeypatch.setattr('dorkscraper.core.requests.get', fail)
+    result = DorkScraper(engine='serpapi_google', retries=3, delay=0).scrape('site:example.com')
+    assert len(attempts) == 1 and ('HTTP %s' % code) in result.error and detail in result.error
+    assert 'secret-test-key' not in result.error
+
+
+def test_rate_limited_html_provider_is_not_retried(monkeypatch):
+    import requests
+    attempts = []
+    def fail(*args, **kwargs):
+        attempts.append(1)
+        response = requests.Response(); response.status_code = 429
+        raise requests.HTTPError('long URL', response=response)
+    monkeypatch.setattr('dorkscraper.core.requests.get', fail)
+    result = DorkScraper(engine='duckduckgo', retries=3, delay=0).scrape('test')
+    assert len(attempts) == 1 and result.blocked and 'HTTP 429' in result.error
+
+
+def test_batch_skips_blocked_and_js_only_providers(tmp_path, monkeypatch):
+    import threading
+    monkeypatch.setattr(webapp, 'DB_PATH', tmp_path / 'batch.db')
+    webapp.init_db()
+    calls = []
+    def scrape(self, query):
+        calls.append((self.engine, query))
+        if self.engine == 'duckduckgo':
+            return SearchResult(dork=query, engine=self.engine, blocked=True)
+        if self.engine == 'google':
+            return SearchResult(dork=query, engine=self.engine, error='Google returned a JavaScript-only page')
+        return SearchResult(dork=query, engine=self.engine)
+    monkeypatch.setattr(DorkScraper, 'scrape', scrape)
+    class NoWait(threading.Event):
+        def wait(self, timeout=None): return False
+    job = {'id':'job', 'created':time.time(), 'queries':['one','two'],
+           'engines':['duckduckgo','google','bing'], 'pages':1, 'delay':1}
+    webapp.run_job(job, {}, NoWait())
+    assert job['status'] == 'completed' and job['completed'] == 6
+    assert calls == [('duckduckgo','one'), ('google','one'), ('bing','one'), ('bing','two')]
+    assert job['results'][3]['skipped_reason'] and job['results'][4]['skipped_reason']
+    assert 'skipped_reason' not in job['results'][5]
+    assert len(webapp.present_job(job)['results']) == 6
+
+
+def test_serpapi_empty_is_completed_as_zero_results(monkeypatch):
+    monkeypatch.setenv('SERPAPI_API_KEY', 'test-key')
+    class Response:
+        status_code = 200
+        text = '''{"search_metadata":{"status":"Success"},"search_information":{"organic_results_state":"Fully empty"},"error":"Google hasn't returned any results for this query."}'''
+        def raise_for_status(self): pass
+    monkeypatch.setattr('dorkscraper.core.requests.get', lambda *a, **k: Response())
+    result = DorkScraper(engine='serpapi_google', retries=0).scrape('site:example.com')
+    assert result.error is None and result.pages_fetched == 1 and result.urls == []
+
+
+def test_yahoo_upstream_error_reported_without_query_url(monkeypatch):
+    import requests
+    def fail(*args, **kwargs):
+        response = requests.Response(); response.status_code = 500
+        raise requests.HTTPError('upstream error with private query', response=response)
+    monkeypatch.setattr('dorkscraper.core.requests.get', fail)
+    result = DorkScraper(engine='yahoo', retries=0).scrape('test')
+    assert 'provider unavailable (HTTP 500)' in result.error
+    assert 'private query' not in result.error

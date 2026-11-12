@@ -45,11 +45,11 @@ function renderJob(job) {
   const running=['queued','running'].includes(job.status);
   $('cancel').hidden=!running; $('progress-wrap').hidden=false;
   $('progress').style.width=`${job.total ? Math.round(job.completed / job.total * 100) : 0}%`;
-  const failed=job.results.some(r=>r.blocked || r.error);
+  const failed=job.results.some(r=>r.blocked || r.error || r.skipped_reason);
   const label=job.status==='completed' ? (failed ? 'Finished with provider errors' : 'Finished') : cap(job.status);
   $('progress-label').textContent=`${label} · ${job.completed} / ${job.total} searches processed`;
   $('result-subtitle').textContent=job.queries.join('  ·  ');
-  const statuses=job.results.map(r => {const div=document.createElement('div'); div.className='status-item'+(r.blocked || r.error ? ' error' : ''); const effective=r.effective_query && r.effective_query !== r.query ? ` · Sent: ${r.effective_query}` : ''; const literal=r.literal_filter ? ` · Exact URL contains ${r.literal_filter}: ${r.literal_filtered_count || 0} removed` : ''; const scope=r.scope_warning ? ` · ${r.scope_warning}` : ` · Scope guard: ${r.out_of_scope_count || 0} out-of-scope URLs removed`; div.textContent=`${engineName(r.engine)} · ${r.query} — ${r.blocked ? 'Blocked / CAPTCHA' : r.error ? 'Error: '+r.error : `${r.urls.length} URLs · ${r.pages_fetched} pages`}${scope}${literal}${effective}`; return div;});
+  const statuses=job.results.map(r => {const div=document.createElement('div'); div.className='status-item'+(r.blocked || r.error || r.skipped_reason ? ' error' : ''); const effective=r.effective_query && r.effective_query !== r.query ? ` · Sent: ${r.effective_query}` : ''; const literal=r.literal_filter ? ` · Exact URL contains ${r.literal_filter}: ${r.literal_filtered_count || 0} removed` : ''; const scope=r.scope_warning ? ` · ${r.scope_warning}` : ` · Scope guard: ${r.out_of_scope_count || 0} out-of-scope URLs removed`; div.textContent=`${engineName(r.engine)} · ${r.query} — ${r.skipped_reason || (r.blocked ? (r.error || 'Blocked / CAPTCHA') : r.error ? 'Error: '+r.error : `${r.urls.length} URLs · ${r.pages_fetched} pages`)}${scope}${literal}${effective}`; return div;});
   if(job.error) { const div=document.createElement('div'); div.className='status-item error'; div.textContent=job.error; statuses.push(div); }
   setChildren($('search-status'),statuses);
   resultRows=job.items || []; renderResults();

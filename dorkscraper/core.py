@@ -112,7 +112,12 @@ class DorkScraper:
                 return resp.text
             except requests.RequestException as exc:
                 status = exc.response.status_code if exc.response is not None else None
-                raise ValueError("SerpApi request failed" + (" (HTTP %s)" % status if status else " (network error)")) from None
+                details = {400: "invalid request", 401: "invalid API key", 403: "account not permitted",
+                           429: "rate or account limit reached", 500: "provider unavailable", 503: "provider unavailable"}
+                message = "SerpApi request failed" + (" (HTTP %s)" % status if status else " (network error)")
+                if status in details:
+                    message += ": " + details[status]
+                raise ValueError(message) from None
         resp = requests.get(url, headers=headers, proxies=proxies, timeout=self.timeout, allow_redirects=self.engine.lower() != "brave")
         resp.raise_for_status()
         return resp.text
@@ -158,6 +163,9 @@ class DorkScraper:
                 return self._fetch_http(url)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
+                if (isinstance(exc, requests.HTTPError) and exc.response is not None
+                        and exc.response.status_code in (403, 429)):
+                    break  # Don't repeatedly request a provider that denied or rate-limited us.
                 if attempt < attempts:
                     wait = self.delay * attempt + random.random()
                     self._emit("warn", f"fetch failed (attempt {attempt}): {exc}; retrying in {wait:.1f}s")
@@ -178,8 +186,18 @@ class DorkScraper:
                 page_url = engine.build_url(result.effective_query, page)
                 html = self._fetch(page_url)
             except Exception as exc:  # noqa: BLE001
-                result.error = str(exc)
-                self._emit("error", f"giving up on page {page + 1}: {exc}")
+                if isinstance(exc, requests.HTTPError) and exc.response is not None:
+                    code = exc.response.status_code
+                    if code in (403, 429):
+                        result.blocked = True
+                        result.error = f"{engine.name} denied or rate-limited this request (HTTP {code}); try later."
+                    elif code >= 500:
+                        result.error = f"{engine.name} provider unavailable (HTTP {code}); try later or select another provider."
+                    else:
+                        result.error = f"{engine.name} request failed (HTTP {code})."
+                else:
+                    result.error = str(exc)
+                self._emit("error", f"giving up on page {page + 1}: {result.error}")
                 break
             if engine.is_blocked(html):
                 result.blocked = True
