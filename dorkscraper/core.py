@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
@@ -83,8 +84,14 @@ class DorkScraper:
             "DNT": "1",
             "Connection": "keep-alive",
         }
+        if self.engine.lower() == "brave":
+            key = os.environ.get("BRAVE_API_KEY")
+            if not key:
+                raise ValueError("Brave requires the BRAVE_API_KEY environment variable")
+            headers["X-Subscription-Token"] = key
+            headers["Accept"] = "application/json"
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
-        resp = requests.get(url, headers=headers, proxies=proxies, timeout=self.timeout)
+        resp = requests.get(url, headers=headers, proxies=proxies, timeout=self.timeout, allow_redirects=self.engine.lower() != "brave")
         resp.raise_for_status()
         return resp.text
 
@@ -114,6 +121,10 @@ class DorkScraper:
 
     def _fetch(self, url: str) -> str:
         last_exc: Optional[Exception] = None
+        if self.engine.lower() == "brave" and not os.environ.get("BRAVE_API_KEY"):
+            raise ValueError("Brave requires the BRAVE_API_KEY environment variable")
+        if self.engine.lower() == "brave" and self.use_selenium:
+            raise ValueError("Brave API cannot be used with Selenium")
         for attempt in range(1, self.retries + 2):
             try:
                 if self.use_selenium:
@@ -135,9 +146,9 @@ class DorkScraper:
         result = SearchResult(dork=dork, engine=engine.name)
         collected: List[str] = []
         for page in range(self.pages):
-            page_url = engine.build_url(dork, page)
             self._emit("info", f"[{engine.name}] page {page + 1}/{self.pages}: {dork}")
             try:
+                page_url = engine.build_url(dork, page)
                 html = self._fetch(page_url)
             except Exception as exc:  # noqa: BLE001
                 result.error = str(exc)
@@ -147,11 +158,19 @@ class DorkScraper:
                 result.blocked = True
                 self._emit("error", f"{engine.name} returned a block/CAPTCHA page; stopping.")
                 break
-            found = engine.parse(html)
+            try:
+                found = engine.parse(html)
+            except (ValueError, TypeError, KeyError) as exc:
+                result.error = "Failed to parse search response: " + str(exc)
+                self._emit("error", result.error)
+                break
             collected.extend(found)
             result.pages_fetched += 1
             self._emit("info", f"  -> {len(found)} raw URLs on this page")
             if not found:
+                if engine.name == "google" and ("/httpservice/retry/enablejs" in html or "enable JavaScript" in html):
+                    result.error = "Google returned a JavaScript-only page; try another provider or Selenium."
+                    self._emit("warn", result.error)
                 break
             if page + 1 < self.pages:
                 self._sleep_between()
