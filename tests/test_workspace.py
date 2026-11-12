@@ -253,3 +253,67 @@ def test_yahoo_upstream_error_reported_without_query_url(monkeypatch):
     result = DorkScraper(engine='yahoo', retries=0).scrape('test')
     assert 'provider unavailable (HTTP 500)' in result.error
     assert 'private query' not in result.error
+
+
+def test_duckduckgo_via_serpapi_uses_key_and_respects_scope(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    monkeypatch.setenv('SERPAPI_API_KEY', 'test-only-secret')
+    class Response:
+        status_code = 200
+        text = '{"organic_results":[{"link":"https://sub.example.com/?id=1"},{"link":"https://elsewhere.test/"}]}'
+        def raise_for_status(self): pass
+    calls = []
+    def get(url, **kwargs):
+        calls.append(url)
+        assert parse_qs(urlsplit(url).query)['engine'] == ['duckduckgo']
+        assert 'test-only-secret' not in url
+        assert kwargs['params'] == {'api_key': 'test-only-secret'} and kwargs['allow_redirects'] is False
+        return Response()
+    monkeypatch.setattr('dorkscraper.core.requests.get', get)
+    r = DorkScraper(engine='serpapi_duckduckgo', retries=3).scrape('site:*.example.com')
+    assert r.urls == ['https://sub.example.com/?id=1'] and r.out_of_scope_count == 1 and len(calls) == 1
+
+
+def test_duckduckgo_serpapi_never_retries_or_leaks_key(monkeypatch):
+    import requests
+    monkeypatch.setenv('SERPAPI_API_KEY', 'test-only-secret')
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append(1)
+        raise requests.ConnectionError('test-only-secret')
+    monkeypatch.setattr('dorkscraper.core.requests.get', fail)
+    r = DorkScraper(engine='serpapi_duckduckgo', retries=3, delay=0).scrape('test')
+    assert len(calls) == 1 and 'network error' in r.error and 'test-only-secret' not in r.error
+
+
+def test_job_rejects_unconfigured_apis_without_launching(client, monkeypatch):
+    monkeypatch.delenv('SERPAPI_API_KEY', raising=False)
+    monkeypatch.delenv('BRAVE_API_KEY', raising=False)
+    for engine, var in [('brave','BRAVE_API_KEY'), ('serpapi_google','SERPAPI_API_KEY'), ('serpapi_duckduckgo','SERPAPI_API_KEY')]:
+        r = client.post('/api/jobs', headers=headers(), json={'queries':['test'], 'engines':[engine]})
+        assert r.status_code == 422 and var in r.json()['detail']
+    assert client.get('/api/jobs').json() == []
+
+
+def test_duckduckgo_serpapi_follows_only_numeric_pagination(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    monkeypatch.setenv('SERPAPI_API_KEY', 'test-key')
+    calls = []
+    def fetch(self, url):
+        calls.append(url)
+        offset = parse_qs(urlsplit(url).query)['start'][0]
+        if offset == '0':
+            return '{"organic_results":[{"link":"https://example.com/one"}],"serpapi_pagination":{"next":"https://untrusted.test/?start=7&api_key=evil"}}'
+        assert offset == '7' and urlsplit(url).hostname == 'serpapi.com' and 'evil' not in url
+        return '{"organic_results":[{"link":"https://example.com/two"}]}'
+    monkeypatch.setattr(DorkScraper, '_fetch', fetch)
+    monkeypatch.setattr(DorkScraper, '_sleep_between', lambda self: None)
+    result = DorkScraper(engine='serpapi_duckduckgo', pages=4).scrape('site:example.com')
+    assert len(calls) == 2 and result.error is None and result.pages_fetched == 2
+    assert result.urls == ['https://example.com/one','https://example.com/two']
+
+
+def test_duckduckgo_serpapi_invalid_pagination_is_error(monkeypatch):
+    monkeypatch.setattr(DorkScraper, '_fetch', lambda self, url: '{"organic_results":[{"link":"https://example.com/"}],"serpapi_pagination":{"next":"https://serpapi.com/search?start=0"}}')
+    result = DorkScraper(engine='serpapi_duckduckgo', pages=2).scrape('site:example.com')
+    assert result.pages_fetched == 1 and 'pagination offset' in result.error

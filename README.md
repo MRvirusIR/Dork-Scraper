@@ -25,7 +25,7 @@
 
 - **Local web workspace** — responsive search, URL cleaner, dark/light theme, and local history.
 - **Multi-engine searches** — run multiple queries across selected engines, combine results, track their source, and export TXT, JSON or CSV.
-- **API providers** — Brave Search API and Google results via the third-party SerpApi service, using your own API keys.
+- **API providers** — Brave Search API and Google and DuckDuckGo results via the third-party SerpApi service, using your own API keys.
 - **URL Cleaner** — paste or import a list, preview cleaned URLs alongside their first original, and export; no target URLs are contacted.
 - **Local jobs** — per-engine status and errors, progress, cancellation and SQLite history.
 - **Safer validation** — rejects invalid URL schemes, invalid ports and URLs containing credentials.
@@ -72,12 +72,13 @@ Brave's API supports up to 10 pages and 20 results per page. Search engines may 
 ### Troubleshooting provider results
 
 - Start with `site:example.com` to include the apex and subdomains; `site:*.example.com` keeps **only subdomains**. Then add filters one at a time. A single `inurl:"?name="` is enforced as a literal URL substring, not as `&name=`. Indexed results can be incomplete or absent.
+- When a SerpApi key is configured, Google via SerpApi is selected by default. Unconfigured API providers are disabled; configure their key and restart the panel to enable them. A key being present does not guarantee validity or quota.
 - CAPTCHA, HTTP 403/429, JavaScript-only Google pages and Yahoo HTTP 500 are provider-side responses, not evidence the target has no pages. The panel stops requesting a blocked provider or JavaScript-only Google for the rest of that job and shows skipped searches explicitly; try later or choose another provider. It does not bypass challenges.
 - SerpApi may report a successful empty Google search in an `error` field; this is treated as zero results. Actual HTTP failures display a sanitized category without exposing the API key. Check your account, quota and provider status when needed.
 
-### Google via SerpApi (optional third party)
+### Google and DuckDuckGo via SerpApi (optional third party)
 
-The HTML Google provider may return a JavaScript-only page. As an alternative, select **Google via SerpApi** in the panel, or use `-e serpapi_google` in the CLI. This is a third-party service, **not an official Google API**. It needs a [SerpApi account and API key](https://serpapi.com/manage-api-key) and may use a paid plan; check [current quotas and prices](https://serpapi.com/pricing). Queries and result data are sent to SerpApi and may be retained by the service; review its terms and privacy policy. Do not paste your API key into the UI, a dork or an output file.
+Direct Google or DuckDuckGo can return a challenge or block. As an alternative, select **Google via SerpApi** or **DuckDuckGo via SerpApi** in the panel, or use `-e serpapi_google` or `-e serpapi_duckduckgo` in the CLI. These are separately selected providers, not an automatic fallback; they can still fail or be unavailable. DuckDuckGo pagination follows the next offset provided by SerpApi and stops when no next page is offered. This is a third-party service, **not an official Google API**. It needs a [SerpApi account and API key](https://serpapi.com/manage-api-key) and may use a paid plan; check [current quotas and prices](https://serpapi.com/pricing). Queries and result data are sent to SerpApi and may be retained by the service; review its terms and privacy policy. Do not paste your API key into the UI, a dork or an output file.
 
 ```bash
 export SERPAPI_API_KEY="your-api-key"  # PowerShell: $env:SERPAPI_API_KEY="your-api-key"

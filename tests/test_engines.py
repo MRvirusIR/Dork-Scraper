@@ -2,7 +2,7 @@ from dorkscraper.engines import ENGINES, get_engine
 
 
 def test_all_engines_registered():
-    assert set(ENGINES) == {"google", "bing", "duckduckgo", "yahoo", "brave", "serpapi_google"}
+    assert set(ENGINES) == {"google", "bing", "duckduckgo", "yahoo", "brave", "serpapi_google", "serpapi_duckduckgo"}
 
 
 def test_google_parse():
@@ -64,3 +64,12 @@ def test_captcha_word_in_result_is_not_blocked():
     assert not engine.is_blocked(html)
     assert engine.is_blocked('<div class="anomaly-modal">challenge</div>')
     assert engine.parse(html) == ['https://example.com/captcha']
+
+
+def test_serpapi_duckduckgo_url_and_parsing():
+    from urllib.parse import urlsplit, parse_qs
+    engine = get_engine('serpapi_duckduckgo')
+    for page, offset in [(0, '0'), (1, '11'), (2, '61')]:
+        params = parse_qs(urlsplit(engine.build_url('site:example.com', page)).query)
+        assert params['engine'] == ['duckduckgo'] and params['start'] == [offset]
+    assert engine.parse('{"organic_results":[{"link":"https://example.com/x"}]}') == ['https://example.com/x']
